@@ -2,12 +2,18 @@ import express from "express"
 import cors from "cors"
 import dotenv from "dotenv"
 import fs from "fs-extra"
-import path from "path"
-import archiver from "archiver"
 import chalk from "chalk"
 import { v4 as uuidv4 } from "uuid"
+import swaggerJsdoc from "swagger-jsdoc"
+import swaggerUi from "swagger-ui-express"
 import TracedLLMProvider from "./lib/llm-providers.js"
-import { traceFunction } from "./lib/langsmith-tracer.js"
+import { spawn } from "child_process"
+import path from "path"
+import { fileURLToPath } from "url"
+import net from "net"
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 dotenv.config()
 
@@ -31,19 +37,408 @@ const conversationContexts = new Map()
 const llmProvider = new TracedLLMProvider()
 
 // ============================================================================
-// FEATURE FLAGS - Comment/uncomment to enable/disable features
+// SWAGGER CONFIGURATION
 // ============================================================================
-const ENABLE_NEW_CHAIN = true // New flow: Groq → Mistral → Groq (Checker) → Anthropic
-const ENABLE_LANGSMITH_TRACING = process.env.LANGSMITH_TRACING === "true"
-const ENABLE_LIVE_PREVIEW = true // Enable live preview functionality
+const swaggerOptions = {
+  definition: {
+    openapi: "3.0.0",
+    info: {
+      title: "Web Game AI Generator API",
+      version: "2.0.0",
+      description: "Streaming API for generating HTML5 Canvas web games using AI chains",
+      contact: {
+        name: "Web Game AI Generator",
+        email: "support@webgameai.com",
+      },
+    },
+    servers: [
+      {
+        url: `http://localhost:${PORT}`,
+        description: "Development server",
+      },
+    ],
+    components: {
+      schemas: {
+        GamePrompt: {
+          type: "object",
+          required: ["prompt"],
+          properties: {
+            prompt: {
+              type: "string",
+              description: "Description of the web game to generate",
+              example: "Create a Snake game with HTML5 Canvas, smooth movement, score system, and mobile controls",
+              minLength: 10,
+              maxLength: 1000,
+            },
+          },
+        },
+        StreamEvent: {
+          type: "object",
+          properties: {
+            event: {
+              type: "string",
+              enum: ["progress", "step_complete", "file_generated", "complete", "error"],
+              description: "Type of stream event",
+            },
+            data: {
+              type: "object",
+              description: "Event data payload",
+            },
+            timestamp: {
+              type: "string",
+              format: "date-time",
+              description: "Event timestamp",
+            },
+          },
+        },
+        ProgressEvent: {
+          type: "object",
+          properties: {
+            event: {
+              type: "string",
+              enum: ["progress"],
+            },
+            data: {
+              type: "object",
+              properties: {
+                step: {
+                  type: "integer",
+                  description: "Current step number",
+                },
+                totalSteps: {
+                  type: "integer",
+                  description: "Total number of steps",
+                },
+                stepName: {
+                  type: "string",
+                  description: "Name of current step",
+                },
+                progress: {
+                  type: "integer",
+                  minimum: 0,
+                  maximum: 100,
+                  description: "Progress percentage",
+                },
+                message: {
+                  type: "string",
+                  description: "Progress message",
+                },
+              },
+            },
+          },
+        },
+        FileEvent: {
+          type: "object",
+          properties: {
+            event: {
+              type: "string",
+              enum: ["file_generated"],
+            },
+            data: {
+              type: "object",
+              properties: {
+                fileName: {
+                  type: "string",
+                  description: "Name of the generated file",
+                },
+                fileType: {
+                  type: "string",
+                  enum: ["html", "js"],
+                  description: "Type of the file",
+                },
+                content: {
+                  type: "string",
+                  description: "Clean file content without generation comments",
+                },
+                size: {
+                  type: "integer",
+                  description: "File size in characters",
+                },
+              },
+            },
+          },
+        },
+        CompleteEvent: {
+          type: "object",
+          properties: {
+            event: {
+              type: "string",
+              enum: ["complete"],
+            },
+            data: {
+              type: "object",
+              properties: {
+                chatId: {
+                  type: "integer",
+                  description: "Chat session ID",
+                },
+                projectId: {
+                  type: "string",
+                  description: "Generated project UUID",
+                },
+                totalFiles: {
+                  type: "integer",
+                  description: "Total number of files generated",
+                },
+                aiGeneratedFiles: {
+                  type: "integer",
+                  description: "Number of files generated by AI",
+                },
+                chainUsed: {
+                  type: "string",
+                  enum: ["simple", "full"],
+                  description: "AI chain type used",
+                },
+                setupInstructions: {
+                  type: "object",
+                  properties: {
+                    npmInstall: {
+                      type: "string",
+                      example: "npm install",
+                    },
+                    startCommand: {
+                      type: "string",
+                      example: "npm start",
+                    },
+                    url: {
+                      type: "string",
+                      example: "http://localhost:3000",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        ErrorEvent: {
+          type: "object",
+          properties: {
+            event: {
+              type: "string",
+              enum: ["error"],
+            },
+            data: {
+              type: "object",
+              properties: {
+                error: {
+                  type: "string",
+                  description: "Error message",
+                },
+                details: {
+                  type: "string",
+                  description: "Detailed error information",
+                },
+                chatId: {
+                  type: "integer",
+                  description: "Chat session ID",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  apis: ["./server.js"], // Path to the API docs
+}
+
+const swaggerSpec = swaggerJsdoc(swaggerOptions)
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec))
+
+// ============================================================================
+// UTILITY FUNCTIONS
 // ============================================================================
 
-function parseWebGameFiles(webGameCode, chatId) {
-  console.log(chalk.cyan("Parsing comprehensive web game files..."))
+// Find available port
+// Find available port - Fixed version
+async function findAvailablePort(startPort = 8100) {
+  const checkPort = (port) => {
+    return new Promise((resolve) => {
+      const server = net.createServer()
+      
+      server.once('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          // Port is in use
+          resolve(false)
+        } else {
+          // Some other error
+          resolve(false)
+        }
+      })
+      
+      server.once('listening', () => {
+        server.close(() => {
+          // Port is available
+          resolve(true)
+        })
+      })
+      
+      server.listen(port, '127.0.0.1')
+    })
+  }
+
+  for (let port = startPort; port <= startPort + 100; port++) {
+    const isAvailable = await checkPort(port)
+    if (isAvailable) {
+      console.log(chalk.green(`✅ Found available port: ${port}`))
+      return port
+    } else {
+      console.log(chalk.yellow(`⚠️  Port ${port} is in use, trying next...`))
+    }
+  }
+  
+  throw new Error('No available port found in range ' + startPort + '-' + (startPort + 100))
+}
+
+// Save generated files to disk
+async function saveGeneratedFiles(projectId, files) {
+  const projectPath = path.join(PROJECTS_DIR, projectId)
+  await fs.ensureDir(projectPath)
+
+  // Save each file
+  for (const file of files) {
+    const filePath = path.join(projectPath, file.name)
+    await fs.writeFile(filePath, file.content)
+    console.log(chalk.green(`✅ Saved ${file.name} to ${filePath}`))
+  }
+
+  // Create package.json
+  const packageJson = {
+    name: `web-game-${projectId}`,
+    version: "1.0.0",
+    description: "AI Generated Web Game",
+    main: "main.js",
+    scripts: {
+      start: "npx serve . -p 8080",
+      dev: "npx serve . -p 8080"
+    },
+    keywords: ["game", "html5", "canvas"],
+    author: "AI Generator",
+    license: "MIT"
+  }
+
+  await fs.writeFile(
+    path.join(projectPath, 'package.json'),
+    JSON.stringify(packageJson, null, 2)
+  )
+
+  return projectPath
+}
+
+// Run npm install and start server
+// Replace the setupAndRunProject function with this improved version:
+async function setupAndRunProject(projectPath) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      console.log(chalk.cyan(`📦 Running npm install in ${projectPath}...`))
+
+      // Run npm install
+      const npmInstall = spawn('npm', ['install'], {
+        cwd: projectPath,
+        shell: true,
+        stdio: 'pipe'
+      })
+
+      npmInstall.on('close', async (code) => {
+        if (code !== 0) {
+          console.log(chalk.yellow('npm install skipped or had issues (continuing anyway)'))
+        }
+
+        // Find available port
+        const port = await findAvailablePort(8000)
+        console.log(chalk.cyan(`🚀 Starting server on port ${port}...`))
+
+        // Start the server
+        const serverProcess = spawn('npx', ['serve', '.', '-p', port.toString()], {
+          cwd: projectPath,
+          shell: true,
+          stdio: 'pipe',
+          detached: false
+        })
+
+        // Check if server started successfully
+        let serverStarted = false
+        
+        serverProcess.stdout.on('data', (data) => {
+          const output = data.toString()
+          console.log(chalk.gray(`Server output: ${output}`))
+          
+          // Check for server start messages
+          if (output.includes('localhost') || output.includes('Listening') || output.includes(port.toString())) {
+            if (!serverStarted) {
+              serverStarted = true
+              const serverUrl = `http://localhost:${port}`
+              console.log(chalk.green(`✅ Server running at ${serverUrl}`))
+              resolve({
+                url: serverUrl,
+                port: port,
+                process: serverProcess
+              })
+            }
+          }
+        })
+
+        serverProcess.stderr.on('data', (data) => {
+          console.log(chalk.gray(`Server stderr: ${data.toString()}`))
+        })
+
+        // Fallback: resolve after a timeout even if we don't see server messages
+        setTimeout(() => {
+          if (!serverStarted) {
+            const serverUrl = `http://localhost:${port}`
+            console.log(chalk.yellow(`⚠️  Server may be running at ${serverUrl} (timeout reached)`))
+            resolve({
+              url: serverUrl,
+              port: port,
+              process: serverProcess
+            })
+          }
+        }, 5000)
+
+        serverProcess.on('error', (error) => {
+          console.error(chalk.red('Server error:', error))
+          if (!serverStarted) {
+            reject(error)
+          }
+        })
+      })
+
+      npmInstall.on('error', (error) => {
+        console.error(chalk.red('npm install error:', error))
+        reject(error)
+      })
+
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
+// Enhanced file validation and parsing with code cleanup
+function validateAndParseWebGameFiles(webGameCode, chatId) {
+  console.log(chalk.cyan("Validating and parsing web game files with cleanup..."))
+
+  if (!webGameCode || typeof webGameCode !== "string") {
+    console.log(chalk.yellow("No web game code provided, using default structure..."))
+    webGameCode = "// Default web game structure"
+  }
 
   const files = []
+  const missingFiles = []
 
-  // Comprehensive file separators for modular architecture
+  const requiredFiles = [
+    "index.html",
+    "gameManager.js",
+    "audioManager.js",
+    "main.js",
+    "uiManager.js",
+    "inputManager.js",
+    "renderer.js",
+    "gameObjects.js",
+    "utils.js",
+    "config.js",
+  ]
+
   const fileSeparators = [
     { pattern: /\/\/ === index\.html ===([\s\S]*?)(?=\/\/ === |$)/g, name: "index.html", type: "html" },
     { pattern: /\/\/ === gameManager\.js ===([\s\S]*?)(?=\/\/ === |$)/g, name: "gameManager.js", type: "js" },
@@ -57,220 +452,104 @@ function parseWebGameFiles(webGameCode, chatId) {
     { pattern: /\/\/ === config\.js ===([\s\S]*?)(?=\/\/ === |$)/g, name: "config.js", type: "js" },
   ]
 
+  // Parse files using separators
   fileSeparators.forEach(({ pattern, name, type }) => {
     const matches = [...webGameCode.matchAll(pattern)]
     if (matches.length > 0) {
-      const content = matches[0][1].trim()
+      let content = matches[0][1].trim()
+
+      // Clean up the content
+      content = cleanupGeneratedCode(content, name)
+
       if (content) {
         files.push({
           name: name,
           content: content,
           type: type,
         })
+        console.log(chalk.green(`✅ Found and cleaned ${name} (${content.length} chars)`))
       }
+    } else {
+      missingFiles.push(name)
     }
   })
 
-  // If no separators found, try to extract from code blocks and class detection
-  if (files.length === 0) {
-    console.log(chalk.yellow("No file separators found, attempting comprehensive class parsing..."))
-
-    // Look for HTML content
-    const htmlMatch = webGameCode.match(/<!DOCTYPE html>[\s\S]*<\/html>/i)
-    if (htmlMatch) {
-      files.push({
-        name: "index.html",
-        content: htmlMatch[0],
-        type: "html",
-      })
+  // Check for missing required files
+  requiredFiles.forEach((fileName) => {
+    if (!files.find((f) => f.name === fileName)) {
+      missingFiles.push(fileName)
     }
+  })
 
-    // Look for various class patterns
-    const classPatterns = [
-      { pattern: /class GameManager[\s\S]*?(?=class |$)/i, name: "gameManager.js" },
-      { pattern: /class AudioManager[\s\S]*?(?=class |$)/i, name: "audioManager.js" },
-      { pattern: /class UIManager[\s\S]*?(?=class |$)/i, name: "uiManager.js" },
-      { pattern: /class InputManager[\s\S]*?(?=class |$)/i, name: "inputManager.js" },
-      { pattern: /class Renderer[\s\S]*?(?=class |$)/i, name: "renderer.js" },
-      { pattern: /class.*(?:Player|Enemy|Food|GameObject)[\s\S]*?(?=class |$)/i, name: "gameObjects.js" },
-    ]
-
-    classPatterns.forEach(({ pattern, name }) => {
-      const match = webGameCode.match(pattern)
-      if (match) {
-        files.push({
-          name: name,
-          content: match[0].trim(),
-          type: "js",
-        })
-      }
-    })
+  const validationResult = {
+    files,
+    missingFiles: [...new Set(missingFiles)],
+    isComplete: missingFiles.length === 0,
+    totalFiles: files.length,
+    requiredFiles: requiredFiles.length,
   }
 
-  // If still minimal files, create comprehensive default structure
-  if (files.length < 6) {
-    console.log(chalk.yellow("Creating comprehensive default file structure..."))
+  console.log(chalk.green(`Parsed and cleaned ${files.length}/${requiredFiles.length} files`))
+  if (missingFiles.length > 0) {
+    console.log(chalk.red(`Missing files: ${missingFiles.join(", ")}`))
+  }
 
-    // Ensure we have all essential files
-    const essentialFiles = [
-      {
-        name: "index.html",
-        content: `<!DOCTYPE html>
+  return validationResult
+}
+
+// Function to clean up generated code
+function cleanupGeneratedCode(content, fileName) {
+  // Remove markdown code blocks
+  content = content.replace(/```javascript\s*/g, "")
+  content = content.replace(/```html\s*/g, "")
+  content = content.replace(/```\s*/g, "")
+
+  // Remove generation comments
+  content = content.replace(/\/\/ Generated by.*?\n/g, "")
+  content = content.replace(/\/\* Generated by.*?\*\//g, "")
+  content = content.replace(/<!-- Generated by.*?-->/g, "")
+
+  // Remove AI chain comments
+  content = content.replace(/\/\/ Enhanced Chain V2.*?\n/g, "")
+  content = content.replace(/\/\/ Chat ID:.*?\n/g, "")
+
+  // Remove extra whitespace and normalize
+  content = content.replace(/\n\s*\n\s*\n/g, "\n\n")
+  content = content.trim()
+
+  return content
+}
+
+// Create complete file structure with templates
+function createCompleteFileStructure(existingFiles, missingFiles, gamePrompt) {
+  const completeFiles = [...existingFiles]
+
+  const fileTemplates = {
+    "index.html": `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Game - Generated by Claw</title>
+    <title>Web Game - ${gamePrompt}</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            font-family: 'Arial', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            color: white;
-        }
-        .game-container {
-            text-align: center;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            padding: 20px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-        }
-        .header {
-            margin-bottom: 20px;
-        }
-        .header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-        }
-        .score {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #ffeb3b;
-            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
-        }
-        #gameCanvas {
-            border: 3px solid #fff;
-            border-radius: 10px;
-            background: #000;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-            margin-bottom: 20px;
-        }
-        .controls {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 10px;
-        }
-        .control-row {
-            display: flex;
-            gap: 10px;
-        }
-        .control-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            width: 50px;
-            height: 50px;
-            border-radius: 10px;
-            font-size: 1.5rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            user-select: none;
-        }
-        .control-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: scale(1.1);
-        }
-        .game-over {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.8);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            border-radius: 10px;
-        }
-        .game-over-content {
-            background: rgba(255, 255, 255, 0.9);
-            color: #333;
-            padding: 30px;
-            border-radius: 15px;
-            text-align: center;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-        }
-        .restart-btn {
-            background: #4caf50;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            font-size: 1.1rem;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.3s ease;
-        }
-        .restart-btn:hover {
-            background: #45a049;
-        }
-        .hidden {
-            display: none !important;
-        }
-        @media (max-width: 768px) {
-            .game-container {
-                padding: 15px;
-                margin: 10px;
-            }
-            .header h1 {
-                font-size: 2rem;
-            }
-            #gameCanvas {
-                width: 300px;
-                height: 300px;
-            }
-        }
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; text-align: center; background: #1a1a2e; color: white; }
+        canvas { border: 2px solid #fff; background: #000; margin: 20px 0; }
+        .controls { margin: 20px 0; }
+        .control-btn { margin: 5px; padding: 10px 20px; font-size: 16px; cursor: pointer; background: #333; color: white; border: none; border-radius: 5px; }
+        .control-btn:hover { background: #555; }
+        .score { font-size: 18px; margin: 10px 0; }
     </style>
 </head>
 <body>
-    <!-- Generated by Claw: Anthropic -->
-    <div class="game-container">
-        <div class="header">
-            <h1 id="gameTitle">Web Game</h1>
-            <div class="score">Score: <span id="score">0</span></div>
-        </div>
-        
-        <div style="position: relative; display: inline-block;">
-            <canvas id="gameCanvas" width="400" height="400"></canvas>
-            
-            <div id="gameOverScreen" class="game-over">
-                <div class="game-over-content">
-                    <h2>Game Over!</h2>
-                    <p>Final Score: <span id="finalScore">0</span></p>
-                    <button id="restartBtn" class="restart-btn">Restart Game</button>
-                </div>
-            </div>
-        </div>
-        
-        <div class="controls">
-            <button class="control-btn" data-direction="up">↑</button>
-            <div class="control-row">
-                <button class="control-btn" data-direction="left">←</button>
-                <button class="control-btn" data-direction="down">↓</button>
-                <button class="control-btn" data-direction="right">→</button>
-            </div>
-        </div>
+    <h1>Web Game - AI Generated</h1>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    <div class="controls">
+        <button class="control-btn" data-direction="up">↑</button><br>
+        <button class="control-btn" data-direction="left">←</button>
+        <button class="control-btn" data-direction="down">↓</button>
+        <button class="control-btn" data-direction="right">→</button>
     </div>
+    <div class="score">Score: <span id="score">0</span></div>
     
     <script src="config.js"></script>
     <script src="utils.js"></script>
@@ -283,149 +562,48 @@ function parseWebGameFiles(webGameCode, chatId) {
     <script src="main.js"></script>
 </body>
 </html>`,
-        type: "html",
-      },
-      {
-        name: "config.js",
-        content: `/*
- * Generated by Claw: Anthropic
- * Game Configuration and Settings
- */
 
-const GameConfig = {
+    "config.js": `const GameConfig = {
   CANVAS_WIDTH: 400,
   CANVAS_HEIGHT: 400,
   GRID_SIZE: 20,
   INITIAL_SPEED: 150,
-  MIN_SPEED: 80,
-  SPEED_INCREASE: 2,
-  POINTS_PER_FOOD: 10,
-  
   COLORS: {
     BACKGROUND: '#000000',
-    SNAKE_HEAD: '#00ff00',
-    SNAKE_BODY: '#009900',
-    FOOD: '#ff0000',
-    GRID: '#111111',
+    PRIMARY: '#00ff00',
+    SECONDARY: '#ff0000',
     UI_TEXT: '#ffffff'
-  },
-  
-  AUDIO: {
-    MASTER_VOLUME: 0.3,
-    SFX_VOLUME: 0.5
-  },
-  
-  INPUT: {
-    KEYBOARD_ENABLED: true,
-    TOUCH_ENABLED: true,
-    MOUSE_ENABLED: true
   }
 };
-
 window.GameConfig = GameConfig;`,
-        type: "js",
-      },
-    ]
 
-    // Add essential files if they don't exist
-    essentialFiles.forEach((essentialFile) => {
-      if (!files.find((f) => f.name === essentialFile.name)) {
-        files.push(essentialFile)
-      }
-    })
-
-    // Add remaining files if not present
-    const additionalFiles = [
-      {
-        name: "utils.js",
-        content: `/*
- * Generated by Claw: Anthropic
- * Utility Functions and Helpers
- */
-
-const Utils = {
-  clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
-  lerp: (start, end, factor) => start + (end - start) * factor,
-  distance: (x1, y1, x2, y2) => Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2),
+    "utils.js": `const Utils = {
   randomInt: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
-  randomFloat: (min, max) => Math.random() * (max - min) + min,
-  randomFromArray: (array) => array[Math.floor(Math.random() * array.length)],
-  getElementById: (id) => document.getElementById(id),
-  addClass: (element, className) => element.classList.add(className),
-  removeClass: (element, className) => element.classList.remove(className),
-  toggleClass: (element, className) => element.classList.toggle(className),
-  gridToPixel: (gridPos, gridSize) => gridPos * gridSize,
-  pixelToGrid: (pixelPos, gridSize) => Math.floor(pixelPos / gridSize),
-  isValidGridPosition: (x, y, width, height) => {
-    return x >= 0 && x < width && y >= 0 && y < height;
-  },
-  
-  debounce: (func, wait) => {
-    let timeout;
-    return function executedFunction(...args) {
-      const later = () => {
-        clearTimeout(timeout);
-        func(...args);
-      };
-      clearTimeout(timeout);
-      timeout = setTimeout(later, wait);
-    };
-  },
-  
-  saveToStorage: (key, data) => {
-    try {
-      localStorage.setItem(key, JSON.stringify(data));
-    } catch (error) {
-      console.warn('Failed to save to localStorage:', error);
-    }
-  },
-  
-  loadFromStorage: (key, defaultValue = null) => {
-    try {
-      const data = localStorage.getItem(key);
-      return data ? JSON.parse(data) : defaultValue;
-    } catch (error) {
-      console.warn('Failed to load from localStorage:', error);
-      return defaultValue;
-    }
-  }
+  clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
+  distance: (x1, y1, x2, y2) => Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 };
-
 window.Utils = Utils;`,
-        type: "js",
-      },
-      {
-        name: "gameManager.js",
-        content: webGameCode.includes("class GameManager")
-          ? webGameCode
-          : `/*
- * Generated by Claw: Anthropic
- * Main Game Manager - Core Game Logic
- */
 
-class GameManager {
+    "gameManager.js": `class GameManager {
   constructor(canvas, audioManager, uiManager, inputManager, renderer) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
     this.audioManager = audioManager;
     this.uiManager = uiManager;
     this.inputManager = inputManager;
     this.renderer = renderer;
-    
-    this.gameActive = true;
     this.score = 0;
+    this.gameActive = false;
     this.gameSpeed = GameConfig.INITIAL_SPEED;
-    
     this.setupGame();
-    this.gameLoop();
   }
-
+  
   setupGame() {
     this.score = 0;
     this.gameActive = true;
     this.uiManager.updateScore(this.score);
+    this.gameLoop();
   }
-
+  
   gameLoop() {
     if (this.gameActive) {
       setTimeout(() => {
@@ -435,47 +613,47 @@ class GameManager {
       }, this.gameSpeed);
     }
   }
-
+  
   update() {
     const input = this.inputManager.getInput();
-    // Process input and update game state
+    if (input) {
+      console.log('Input received:', input);
+    }
   }
-
+  
   render() {
     this.renderer.clear();
-    this.renderer.drawGame();
+    this.renderer.drawText('Game Running!', this.canvas.width / 2, this.canvas.height / 2);
+    this.renderer.drawText('Score: ' + this.score, this.canvas.width / 2, 50);
   }
-
+  
+  addScore(points = 10) {
+    this.score += points;
+    this.uiManager.updateScore(this.score);
+    this.audioManager.playSound('score');
+  }
+  
   gameOver() {
     this.gameActive = false;
-    this.audioManager.playGameOverSound();
+    this.audioManager.playSound('gameOver');
     this.uiManager.showGameOver(this.score);
   }
-
+  
   restart() {
     this.setupGame();
-    this.gameLoop();
   }
 }
-
 window.GameManager = GameManager;`,
-        type: "js",
-      },
-      {
-        name: "audioManager.js",
-        content: `/*
- * Generated by Claw: Anthropic
- * Audio Manager - Web Audio API Management
- */
 
-class AudioManager {
+    "audioManager.js": `class AudioManager {
   constructor() {
     this.audioContext = null;
     this.sounds = {};
     this.enabled = true;
+    this.volume = 0.3;
     this.initAudio();
   }
-
+  
   initAudio() {
     try {
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -485,441 +663,255 @@ class AudioManager {
       this.enabled = false;
     }
   }
-
+  
   createSounds() {
-    this.sounds.eat = this.createBeep(800, 0.1, "sine");
-    this.sounds.gameOver = this.createBeep(200, 0.5, "sawtooth");
+    this.sounds.score = () => this.createBeep(800, 0.1);
+    this.sounds.gameOver = () => this.createBeep(200, 0.5);
+    this.sounds.move = () => this.createBeep(400, 0.05);
   }
-
-  createBeep(frequency, duration, type = "sine") {
-    return () => {
-      if (!this.enabled || !this.audioContext) return;
-
-      const oscillator = this.audioContext.createOscillator();
-      const gainNode = this.audioContext.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(this.audioContext.destination);
-
-      oscillator.frequency.value = frequency;
-      oscillator.type = type;
-
-      gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration);
-
-      oscillator.start(this.audioContext.currentTime);
-      oscillator.stop(this.audioContext.currentTime + duration);
-    };
+  
+  createBeep(frequency, duration) {
+    if (!this.enabled || !this.audioContext) return;
+    
+    const oscillator = this.audioContext.createOscillator();
+    const gainNode = this.audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(this.audioContext.destination);
+    
+    oscillator.frequency.value = frequency;
+    oscillator.type = 'sine';
+    
+    gainNode.gain.setValueAtTime(this.volume, this.audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration);
+    
+    oscillator.start(this.audioContext.currentTime);
+    oscillator.stop(this.audioContext.currentTime + duration);
   }
-
-  playEatSound() {
-    if (this.sounds.eat) {
-      this.sounds.eat();
-    }
-  }
-
-  playGameOverSound() {
-    if (this.sounds.gameOver) {
-      this.sounds.gameOver();
-    }
-  }
-
-  resumeContext() {
-    if (this.audioContext && this.audioContext.state === 'suspended') {
-      this.audioContext.resume();
+  
+  playSound(soundName) {
+    if (this.sounds[soundName]) {
+      this.sounds[soundName]();
     }
   }
 }
-
 window.AudioManager = AudioManager;`,
-        type: "js",
-      },
-      {
-        name: "uiManager.js",
-        content: `/*
- * Generated by Claw: Anthropic
- * UI Manager - User Interface Management
- */
 
-class UIManager {
+    "uiManager.js": `class UIManager {
   constructor() {
-    this.scoreElement = Utils.getElementById('score');
-    this.gameOverScreen = Utils.getElementById('gameOverScreen');
-    this.finalScoreElement = Utils.getElementById('finalScore');
-    this.restartButton = Utils.getElementById('restartBtn');
-    this.gameTitle = Utils.getElementById('gameTitle');
-    
+    this.scoreElement = document.getElementById('score');
     this.setupEventListeners();
   }
-
+  
   setupEventListeners() {
-    if (this.restartButton) {
-      this.restartButton.addEventListener('click', () => {
-        this.hideGameOver();
-        if (window.game) {
-          window.game.restart();
-        }
-      });
-    }
+    // UI event listeners can be added here
   }
-
+  
   updateScore(score) {
     if (this.scoreElement) {
       this.scoreElement.textContent = score;
     }
   }
-
-  setTitle(title) {
-    if (this.gameTitle) {
-      this.gameTitle.textContent = title;
-    }
-  }
-
+  
   showGameOver(finalScore) {
-    if (this.gameOverScreen && this.finalScoreElement) {
-      this.finalScoreElement.textContent = finalScore;
-      this.gameOverScreen.style.display = 'flex';
-    }
+    setTimeout(() => {
+      alert(\`Game Over! Final Score: \${finalScore}\\nClick Restart to play again.\`);
+    }, 100);
   }
-
-  hideGameOver() {
-    if (this.gameOverScreen) {
-      this.gameOverScreen.style.display = 'none';
-    }
-  }
-
+  
   showMessage(message, duration = 3000) {
     const messageDiv = document.createElement('div');
     messageDiv.textContent = message;
-    messageDiv.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.8); color: white; padding: 10px 20px; border-radius: 5px; z-index: 1000; font-size: 16px;';
-    
+    messageDiv.style.cssText = \`
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.9); color: white; padding: 15px 25px;
+      border-radius: 8px; z-index: 1000; font-size: 18px;
+    \`;
     document.body.appendChild(messageDiv);
-    
-    setTimeout(() => {
-      if (messageDiv.parentNode) {
-        messageDiv.parentNode.removeChild(messageDiv);
-      }
-    }, duration);
+    setTimeout(() => messageDiv.remove(), duration);
   }
 }
-
 window.UIManager = UIManager;`,
-        type: "js",
-      },
-      {
-        name: "inputManager.js",
-        content: `/*
- * Generated by Claw: Anthropic
- * Input Manager - Centralized Input Handling
- */
 
-class InputManager {
+    "inputManager.js": `class InputManager {
   constructor() {
     this.keys = {};
     this.currentInput = null;
     this.lastInput = null;
-    
     this.setupEventListeners();
   }
-
+  
   setupEventListeners() {
-    if (GameConfig.INPUT.KEYBOARD_ENABLED) {
-      document.addEventListener('keydown', (e) => this.handleKeyDown(e));
-      document.addEventListener('keyup', (e) => this.handleKeyUp(e));
-    }
-
-    if (GameConfig.INPUT.TOUCH_ENABLED) {
-      const controlBtns = document.querySelectorAll('.control-btn');
-      controlBtns.forEach(btn => {
-        btn.addEventListener('click', (e) => this.handleControlButton(e));
-        btn.addEventListener('touchstart', (e) => {
-          e.preventDefault();
-          this.handleControlButton(e);
-        });
+    document.addEventListener('keydown', (e) => this.handleKeyDown(e));
+    document.addEventListener('keyup', (e) => this.handleKeyUp(e));
+    
+    const controlBtns = document.querySelectorAll('.control-btn[data-direction]');
+    controlBtns.forEach(btn => {
+      btn.addEventListener('click', (e) => this.handleControlButton(e));
+      btn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        this.handleControlButton(e);
       });
-    }
+    });
   }
-
+  
   handleKeyDown(event) {
     const key = event.key.toLowerCase();
     this.keys[key] = true;
     
-    if (key === 'w' || key === 'arrowup') {
-      this.setInput('up');
-    } else if (key === 's' || key === 'arrowdown') {
-      this.setInput('down');
-    } else if (key === 'a' || key === 'arrowleft') {
-      this.setInput('left');
-    } else if (key === 'd' || key === 'arrowright') {
-      this.setInput('right');
-    } else if (key === ' ') {
-      this.setInput('space');
-      event.preventDefault();
-    }
+    if (key === 'w' || key === 'arrowup') this.setInput('up');
+    else if (key === 's' || key === 'arrowdown') this.setInput('down');
+    else if (key === 'a' || key === 'arrowleft') this.setInput('left');
+    else if (key === 'd' || key === 'arrowright') this.setInput('right');
+    else if (key === ' ') this.setInput('space');
   }
-
+  
   handleKeyUp(event) {
     const key = event.key.toLowerCase();
     this.keys[key] = false;
   }
-
+  
   handleControlButton(event) {
     const direction = event.target.dataset.direction;
-    if (direction) {
-      this.setInput(direction);
+    if (direction) this.setInput(direction);
+  }
+  
+  setInput(input) {
+    if (input !== this.lastInput) {
+      this.currentInput = input;
+      this.lastInput = input;
     }
   }
-
-  setInput(input) {
-    this.lastInput = this.currentInput;
-    this.currentInput = input;
-  }
-
+  
   getInput() {
     const input = this.currentInput;
     this.currentInput = null;
     return input;
   }
-
+  
   isKeyPressed(key) {
     return this.keys[key.toLowerCase()] || false;
   }
-
-  getLastInput() {
-    return this.lastInput;
-  }
-
-  clearInput() {
-    this.currentInput = null;
-    this.lastInput = null;
-  }
 }
-
 window.InputManager = InputManager;`,
-        type: "js",
-      },
-      {
-        name: "renderer.js",
-        content: `/*
- * Generated by Claw: Anthropic
- * Renderer - Canvas Drawing and Visual Effects
- */
 
-class Renderer {
+    "renderer.js": `class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.width = canvas.width;
     this.height = canvas.height;
   }
-
+  
   clear() {
     this.ctx.fillStyle = GameConfig.COLORS.BACKGROUND;
     this.ctx.fillRect(0, 0, this.width, this.height);
   }
-
-  drawGrid() {
-    const gridSize = GameConfig.GRID_SIZE;
-    this.ctx.strokeStyle = GameConfig.COLORS.GRID;
-    this.ctx.lineWidth = 1;
-
-    for (let x = 0; x <= this.width; x += gridSize) {
-      this.ctx.beginPath();
-      this.ctx.moveTo(x, 0);
-      this.ctx.lineTo(x, this.height);
-      this.ctx.stroke();
-    }
-
-    for (let y = 0; y <= this.height; y += gridSize) {
-      this.ctx.beginPath();
-      this.ctx.moveTo(0, y);
-      this.ctx.lineTo(this.width, y);
-      this.ctx.stroke();
-    }
-  }
-
-  drawRect(x, y, width, height, color) {
+  
+  drawRect(x, y, width, height, color = GameConfig.COLORS.PRIMARY) {
     this.ctx.fillStyle = color;
     this.ctx.fillRect(x, y, width, height);
   }
-
-  drawCircle(x, y, radius, color) {
+  
+  drawCircle(x, y, radius, color = GameConfig.COLORS.PRIMARY) {
     this.ctx.fillStyle = color;
     this.ctx.beginPath();
     this.ctx.arc(x, y, radius, 0, 2 * Math.PI);
     this.ctx.fill();
   }
-
+  
   drawText(text, x, y, color = GameConfig.COLORS.UI_TEXT, font = '20px Arial') {
     this.ctx.fillStyle = color;
     this.ctx.font = font;
     this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
     this.ctx.fillText(text, x, y);
   }
-
-  drawGame() {
-    this.drawGrid();
-    this.drawText('Game Generated!', this.width / 2, this.height / 2);
-  }
-
-  drawParticle(x, y, size, color, alpha = 1) {
-    this.ctx.save();
-    this.ctx.globalAlpha = alpha;
-    this.drawCircle(x, y, size, color);
-    this.ctx.restore();
-  }
-
-  drawGradientRect(x, y, width, height, colorStart, colorEnd) {
-    const gradient = this.ctx.createLinearGradient(x, y, x + width, y + height);
-    gradient.addColorStop(0, colorStart);
-    gradient.addColorStop(1, colorEnd);
-    
-    this.ctx.fillStyle = gradient;
-    this.ctx.fillRect(x, y, width, height);
+  
+  drawLine(x1, y1, x2, y2, color = '#333333', width = 1) {
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = width;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x1, y1);
+    this.ctx.lineTo(x2, y2);
+    this.ctx.stroke();
   }
 }
-
 window.Renderer = Renderer;`,
-        type: "js",
-      },
-      {
-        name: "gameObjects.js",
-        content: `/*
- * Generated by Claw: Anthropic
- * Game Objects - Entity Classes and Components
- */
 
-class GameObject {
-  constructor(x, y) {
+    "gameObjects.js": `class GameObject {
+  constructor(x = 0, y = 0) {
     this.x = x;
     this.y = y;
     this.active = true;
+    this.width = GameConfig.GRID_SIZE;
+    this.height = GameConfig.GRID_SIZE;
   }
-
+  
   update() {
     // Override in subclasses
   }
-
+  
   render(renderer) {
     // Override in subclasses
+    renderer.drawRect(this.x, this.y, this.width, this.height);
   }
-
+  
   destroy() {
     this.active = false;
+  }
+  
+  getBounds() {
+    return {
+      left: this.x,
+      right: this.x + this.width,
+      top: this.y,
+      bottom: this.y + this.height
+    };
+  }
+  
+  collidesWith(other) {
+    const a = this.getBounds();
+    const b = other.getBounds();
+    return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
   }
 }
 
 class Player extends GameObject {
   constructor(x, y) {
     super(x, y);
-    this.width = GameConfig.GRID_SIZE;
-    this.height = GameConfig.GRID_SIZE;
-    this.color = GameConfig.COLORS.SNAKE_HEAD;
+    this.color = GameConfig.COLORS.PRIMARY;
+    this.speed = GameConfig.GRID_SIZE;
     this.direction = { x: 1, y: 0 };
-    this.speed = 1;
   }
-
+  
   update(input) {
     if (input) {
       switch (input) {
-        case 'up':
-          if (this.direction.y === 0) {
-            this.direction = { x: 0, y: -1 };
-          }
-          break;
-        case 'down':
-          if (this.direction.y === 0) {
-            this.direction = { x: 0, y: 1 };
-          }
-          break;
-        case 'left':
-          if (this.direction.x === 0) {
-            this.direction = { x: -1, y: 0 };
-          }
-          break;
-        case 'right':
-          if (this.direction.x === 0) {
-            this.direction = { x: 1, y: 0 };
-          }
-          break;
+        case 'up': this.direction = { x: 0, y: -1 }; break;
+        case 'down': this.direction = { x: 0, y: 1 }; break;
+        case 'left': this.direction = { x: -1, y: 0 }; break;
+        case 'right': this.direction = { x: 1, y: 0 }; break;
       }
     }
   }
-
+  
   move() {
     this.x += this.direction.x * this.speed;
     this.y += this.direction.y * this.speed;
   }
-
+  
   render(renderer) {
-    const pixelX = this.x * GameConfig.GRID_SIZE;
-    const pixelY = this.y * GameConfig.GRID_SIZE;
-    renderer.drawRect(pixelX + 1, pixelY + 1, this.width - 2, this.height - 2, this.color);
-  }
-}
-
-class Collectible extends GameObject {
-  constructor(x, y) {
-    super(x, y);
-    this.width = GameConfig.GRID_SIZE;
-    this.height = GameConfig.GRID_SIZE;
-    this.color = GameConfig.COLORS.FOOD;
-    this.value = GameConfig.POINTS_PER_FOOD;
-    this.animationTime = 0;
-  }
-
-  update() {
-    this.animationTime += 0.1;
-  }
-
-  render(renderer) {
-    const pixelX = this.x * GameConfig.GRID_SIZE + GameConfig.GRID_SIZE / 2;
-    const pixelY = this.y * GameConfig.GRID_SIZE + GameConfig.GRID_SIZE / 2;
-    const radius = (GameConfig.GRID_SIZE / 2 - 1) + Math.sin(this.animationTime) * 2;
-    renderer.drawCircle(pixelX, pixelY, radius, this.color);
-  }
-}
-
-class Enemy extends GameObject {
-  constructor(x, y) {
-    super(x, y);
-    this.width = GameConfig.GRID_SIZE;
-    this.height = GameConfig.GRID_SIZE;
-    this.color = '#ff4444';
-    this.speed = 0.5;
-    this.direction = { x: 0, y: 0 };
-  }
-
-  update() {
-    this.move();
-  }
-
-  move() {
-    this.x += this.direction.x * this.speed;
-    this.y += this.direction.y * this.speed;
-  }
-
-  render(renderer) {
-    const pixelX = this.x * GameConfig.GRID_SIZE;
-    const pixelY = this.y * GameConfig.GRID_SIZE;
-    renderer.drawRect(pixelX + 1, pixelY + 1, this.width - 2, this.height - 2, this.color);
+    renderer.drawRect(this.x, this.y, this.width, this.height, this.color);
   }
 }
 
 window.GameObject = GameObject;
-window.Player = Player;
-window.Collectible = Collectible;
-window.Enemy = Enemy;`,
-        type: "js",
-      },
-      {
-        name: "main.js",
-        content: `/*
- * Generated by Claw: Anthropic
- * Main Game Initialization
- */
+window.Player = Player;`,
 
-document.addEventListener('DOMContentLoaded', () => {
+    "main.js": `document.addEventListener('DOMContentLoaded', () => {
+  console.log('Initializing game...');
+  
   const canvas = document.getElementById('gameCanvas');
   
   if (!canvas) {
@@ -927,478 +919,629 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  // Initialize all managers
-  const audioManager = new AudioManager();
-  const uiManager = new UIManager();
-  const inputManager = new InputManager();
-  const renderer = new Renderer(canvas);
-  
-  // Create game instance
-  const game = new GameManager(canvas, audioManager, uiManager, inputManager, renderer);
-  
-  // Make game globally available for restart functionality
-  window.game = game;
-
-  // Make canvas responsive
   function resizeCanvas() {
     const container = canvas.parentElement;
-    const maxSize = Math.min(container.clientWidth - 40, 400);
-    canvas.style.width = maxSize + 'px';
-    canvas.style.height = maxSize + 'px';
+    const maxWidth = Math.min(container.clientWidth - 40, 600);
+    const maxHeight = Math.min(container.clientHeight - 200, 600);
+    const size = Math.min(maxWidth, maxHeight);
+    
+    canvas.style.width = size + 'px';
+    canvas.style.height = size + 'px';
   }
-
-  window.addEventListener('resize', resizeCanvas);
+  
   resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
 
-  // Resume audio context on first interaction
-  document.addEventListener('click', () => {
-    audioManager.resumeContext();
-  }, { once: true });
+  try {
+    const audioManager = new AudioManager();
+    const uiManager = new UIManager();
+    const inputManager = new InputManager();
+    const renderer = new Renderer(canvas);
+    
+    const game = new GameManager(canvas, audioManager, uiManager, inputManager, renderer);
+    
+    window.game = game;
 
-  console.log('Game initialized successfully!');
+    console.log('Game initialized successfully!');
+    uiManager.showMessage('Game Ready! Use arrow keys or buttons to play.', 3000);
+    
+  } catch (error) {
+    console.error('Failed to initialize game:', error);
+    alert('Failed to initialize game. Please refresh the page.');
+  }
 });`,
-        type: "js",
-      },
-    ]
-
-    additionalFiles.forEach((file) => {
-      if (!files.find((f) => f.name === file.name)) {
-        files.push(file)
-      }
-    })
   }
 
-  // Add generation info to each file
-  files.forEach((file) => {
-    if (file.type === "js" && !file.content.includes("Generated by Claw:")) {
-      file.content = `/*
- * Generated by Claw: Anthropic
- * Chat ID: ${chatId}
- * Generated: ${new Date().toISOString()}
+  // Add missing files using templates
+  missingFiles.forEach((fileName) => {
+    if (fileTemplates[fileName]) {
+      completeFiles.push({
+        name: fileName,
+        content: fileTemplates[fileName],
+        type: fileName.endsWith(".html") ? "html" : "js",
+      })
+      console.log(chalk.yellow(`🔧 Auto-generated ${fileName}`))
+    }
+  })
+
+  return completeFiles
+}
+
+// ============================================================================
+// STREAMING API ENDPOINTS
+// ============================================================================
+
+/**
+ * @swagger
+ * /api/generate/simple:
+ *   post:
+ *     summary: Generate web game using simple 2-step AI chain (Groq → Qwen3)
+ *     description: |
+ *       Streams the generation process of an HTML5 Canvas web game using a simplified 2-step AI chain.
+ *       Returns Server-Sent Events (SSE) with progress updates and all generated files.
+ *
+ *       **Chain Steps:**
+ *       1. Groq (LLaMA 3.3 70B) - Game explanation and architecture
+ *       2. Qwen3 Coder - Complete clean code generation
+ *
+ *       **Stream Events:**
+ *       - `progress` - Progress updates with step information
+ *       - `file_generated` - Individual file content as it's generated
+ *       - `complete` - Final completion with project metadata
+ *       - `error` - Error information if generation fails
+ *     tags:
+ *       - Game Generation
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/GamePrompt'
+ *           examples:
+ *             snake_game:
+ *               summary: Snake Game
+ *               value:
+ *                 prompt: "Create a Snake game with HTML5 Canvas, smooth movement, food collection, score system, collision detection, and responsive mobile controls"
+ *             tetris_game:
+ *               summary: Tetris Game
+ *               value:
+ *                 prompt: "Build a Tetris game with HTML5 Canvas, piece rotation, line clearing, increasing difficulty, and responsive design"
+ *     responses:
+ *       200:
+ *         description: Server-Sent Events stream with generation progress and files
+ *         content:
+ *           text/event-stream:
+ *             schema:
+ *               type: string
+ *               description: |
+ *                 Stream of events in Server-Sent Events format:
+ *
+ *                 ```
+ *                 event: progress
+ *                 data: {"step": 1, "totalSteps": 2, "stepName": "Groq Architecture", "progress": 25, "message": "Getting game explanation..."}
+ *
+ *                 event: file_generated
+ *                 data: {"fileName": "index.html", "fileType": "html", "content": "<!DOCTYPE html>...", "size": 1234}
+ *
+ *                 event: complete
+ *                 data: {"chatId": 123, "projectId": "uuid", "totalFiles": 10, "chainUsed": "simple"}
+ *                 ```
+ *             examples:
+ *               progress_event:
+ *                 summary: Progress Event
+ *                 value: |
+ *                   event: progress
+ *                   data: {"step": 1, "totalSteps": 2, "stepName": "Groq Architecture", "progress": 50, "message": "Generating game explanation..."}
+ *               file_event:
+ *                 summary: File Generated Event
+ *                 value: |
+ *                   event: file_generated
+ *                   data: {"fileName": "gameManager.js", "fileType": "js", "content": "class GameManager { ... }", "size": 2048}
+ *       400:
+ *         description: Invalid request - missing or invalid prompt
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Game description is required"
+ *       500:
+ *         description: Internal server error during generation
+ *         content:
+ *           text/event-stream:
+ *             schema:
+ *               type: string
+ *               example: |
+ *                 event: error
+ *                 data: {"error": "AI generation failed", "details": "Connection timeout", "chatId": 123}
  */
-
-${file.content}`
-    } else if (file.type === "html" && !file.content.includes("Generated by Claw")) {
-      file.content = file.content.replace(
-        "<title>",
-        `<!-- Generated by Claw: Anthropic | Chat ID: ${chatId} -->
-    <title>`,
-      )
-    }
-  })
-
-  console.log(chalk.green(`Parsed ${files.length} comprehensive game files successfully`))
-  return files
-}
-
-async function saveChatHistory(chatId, stage, prompt, response) {
-  const chatFile = path.join(CHAT_HISTORY_DIR, `chat${chatId}.json`)
-  let chatHistory = []
-
-  if (await fs.pathExists(chatFile)) {
-    chatHistory = await fs.readJson(chatFile)
-  }
-
-  chatHistory.push({
-    timestamp: new Date().toISOString(),
-    stage,
-    prompt,
-    response,
-    responseLength: response.length,
-  })
-
-  await fs.writeJson(chatFile, chatHistory, { spaces: 2 })
-}
-
-async function updateConversationContext(chatId, role, content) {
-  const context = conversationContexts.get(chatId) || { messages: [] }
-
-  context.messages.push({
-    role: role,
-    content: content,
-    timestamp: new Date().toISOString(),
-  })
-
-  if (context.messages.length > 10) {
-    context.messages = context.messages.slice(-10)
-  }
-
-  conversationContexts.set(chatId, context)
-  return context
-}
-
-async function createWebGameProject(gameCode, gameChain, gamePrompt, chatId) {
-  return await traceFunction(
-    "Web-Game-Project-Creation",
-    async () => {
-      const projectId = uuidv4()
-      const projectName = `web-game-${Date.now()}`
-      const projectDir = path.join(PROJECTS_DIR, projectId)
-
-      console.log(chalk.magenta(`Creating web game project: ${projectName}`))
-
-      await fs.ensureDir(projectDir)
-
-      const gameFiles = parseWebGameFiles(gameCode, chatId)
-
-      for (const file of gameFiles) {
-        const filePath = path.join(projectDir, file.name)
-        await fs.writeFile(filePath, file.content)
-      }
-
-      const packageJson = {
-        name: projectName,
-        version: "1.0.0",
-        description: `Web game: ${gamePrompt}`,
-        main: "index.html",
-        scripts: {
-          start: "python -m http.server 8000",
-          serve: "npx serve .",
-        },
-        keywords: ["game", "html5", "canvas", "ai-generated"],
-        author: "AI Chain: Groq → Mistral → Groq (Checker) → Anthropic",
-        license: "MIT",
-        metadata: {
-          chatId: chatId,
-          generated: new Date().toISOString(),
-          aiChain: "Groq → Mistral → Groq (Checker) → Anthropic",
-          langsmithTracing: ENABLE_LANGSMITH_TRACING,
-        },
-      }
-
-      await fs.writeJson(path.join(projectDir, "package.json"), packageJson, { spaces: 2 })
-
-      const readmeContent = `# ${projectName}
-
-Professional Web Game - Generated with AI Chain
-
-## Game Description
-${gamePrompt}
-
-## AI Generation Chain
-1. **Groq (LLaMA 3.3 70B)**: Game explanation and technical architecture
-2. **Mistral 7B**: Implementation plan and modular class structure
-3. **Groq (LLaMA 3.3 70B)**: Implementation validation and feedback
-4. **Anthropic (Claude 3 Haiku)**: Final comprehensive web game code
-
-## Comprehensive File Structure
-\`\`\`
-${projectName}/
-├── index.html          # Main HTML file with embedded CSS and structure
-├── gameManager.js      # Core game logic, state management, game loop
-├── audioManager.js     # Web Audio API management and sound effects
-├── uiManager.js        # UI management, score display, menus
-├── inputManager.js     # Centralized input handling (keyboard, touch, mouse)
-├── renderer.js         # Canvas drawing utilities and visual effects
-├── gameObjects.js      # Game entity classes (Player, Enemy, Collectible)
-├── utils.js           # Utility functions and helper methods
-├── config.js          # Game configuration and settings
-├── main.js            # Game initialization and setup
-├── package.json       # Project metadata and scripts
-└── README.md          # This file
-\`\`\`
-
-## Quick Start
-
-### Option 1: Simple File Opening
-1. Open \`index.html\` directly in your web browser
-2. The game should load and be playable immediately
-
-### Option 2: Local Server (Recommended)
-1. Install Node.js if not already installed
-2. Run: \`npm install -g serve\`
-3. Run: \`npm run serve\`
-4. Open: \`http://localhost:3000\`
-
-### Option 3: Python Server
-1. Run: \`python -m http.server 8000\`
-2. Run: \`http://localhost:8000\`
-
-## Game Features
-- **Modular Architecture**: Clean separation of concerns with focused classes
-- **HTML5 Canvas Rendering**: Professional 2D graphics with 60fps performance
-- **Responsive Design**: Mobile-first approach with touch controls
-- **Web Audio API**: High-quality sound effects and music
-- **Comprehensive Input**: Keyboard, mouse, and touch support
-- **Visual Effects**: Particle systems, animations, and smooth rendering
-- **Configuration System**: Easy customization through config.js
-- **Utility Library**: Comprehensive helper functions and tools
-
-## AI Chain Details
-- **Step 1 (Groq)**: ${gameChain.groqExplanation ? "Completed" : "Failed"}
-- **Step 2 (Mistral)**: ${gameChain.mistralPlan ? "Completed" : "Failed"}
-- **Step 3 (Groq Checker)**: ${gameChain.groqFeedback ? "Completed" : "Failed"}
-- **Step 4 (Anthropic)**: ${gameChain.webGameCode ? "Completed" : "Failed"}
-
-## Technical Details
-- **Generated**: ${new Date().toISOString()}
-- **Framework**: HTML5 Canvas + Modular JavaScript Architecture
-- **Performance**: Optimized for 60fps gameplay
-- **Compatibility**: Modern browsers with Canvas and Web Audio support
-- **Mobile Ready**: Touch controls and responsive design
-
-Built with AI chain: Groq → Mistral → Groq (Checker) → Anthropic
-`
-
-      await fs.writeFile(path.join(projectDir, "README.md"), readmeContent)
-
-      return { projectId, projectName, projectDir, gameFiles }
-    },
-    {
-      gamePrompt: gamePrompt,
-      chatId: chatId,
-    },
-    { operation: "web-game-project-creation" },
-  )
-}
-
-async function createProjectZip(projectDir, projectId) {
-  const zipPath = path.join(PROJECTS_DIR, `${projectId}.zip`)
-
-  return new Promise((resolve, reject) => {
-    const output = fs.createWriteStream(zipPath)
-    const archive = archiver("zip", { zlib: { level: 9 } })
-
-    output.on("close", () => {
-      console.log(chalk.green(`Web game project zip created: ${archive.pointer()} bytes`))
-      resolve(zipPath)
-    })
-
-    archive.on("error", reject)
-    archive.pipe(output)
-    archive.directory(projectDir, false)
-    archive.finalize()
-  })
-}
-
-// Live preview endpoint
-app.get("/preview/:projectId", async (req, res) => {
-  try {
-    const { projectId } = req.params
-    const projectDir = path.join(PROJECTS_DIR, projectId)
-    const indexPath = path.join(projectDir, "index.html")
-
-    if (!(await fs.pathExists(indexPath))) {
-      return res.status(404).json({ error: "Project not found" })
-    }
-
-    const indexContent = await fs.readFile(indexPath, "utf8")
-    res.setHeader("Content-Type", "text/html")
-    res.send(indexContent)
-  } catch (error) {
-    res.status(500).json({ error: "Failed to load preview" })
-  }
-})
-
-// Serve individual game files for preview
-app.get("/preview/:projectId/:filename", async (req, res) => {
-  try {
-    const { projectId, filename } = req.params
-    const projectDir = path.join(PROJECTS_DIR, projectId)
-    const filePath = path.join(projectDir, filename)
-
-    if (!(await fs.pathExists(filePath))) {
-      return res.status(404).json({ error: "File not found" })
-    }
-
-    const fileContent = await fs.readFile(filePath, "utf8")
-
-    if (filename.endsWith(".js")) {
-      res.setHeader("Content-Type", "application/javascript")
-    } else if (filename.endsWith(".html")) {
-      res.setHeader("Content-Type", "text/html")
-    } else if (filename.endsWith(".css")) {
-      res.setHeader("Content-Type", "text/css")
-    }
-
-    res.send(fileContent)
-  } catch (error) {
-    res.status(500).json({ error: "Failed to load file" })
-  }
-})
-
-// Main generation endpoint with new chain
-app.post("/generate", async (req, res) => {
+app.post("/api/generate/simple", async (req, res) => {
   const chatId = chatCounter++
 
-  await traceFunction(
-    "Web-Game-Generation-Complete",
-    async () => {
-      try {
-        const { prompt } = req.body
+  // Set up Server-Sent Events
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Cache-Control",
+  })
 
-        if (!prompt || !prompt.trim()) {
-          return res.status(400).json({
-            error: "Game description is required",
-            success: false,
-          })
-        }
-
-        console.log(chalk.blue(`Starting WEB GAME generation with AI chain for Chat ${chatId}`))
-        console.log(chalk.blue(`Game Request: ${prompt}`))
-
-        console.log(chalk.magenta("Feature Flags:"))
-        console.log(
-          chalk.magenta(`   New Chain (Groq→Mistral→Groq→Anthropic): ${ENABLE_NEW_CHAIN ? "Enabled" : "Disabled"}`),
-        )
-        console.log(chalk.magenta(`   LangSmith Tracing: ${ENABLE_LANGSMITH_TRACING ? "Enabled" : "Disabled"}`))
-        console.log(chalk.magenta(`   Live Preview: ${ENABLE_LIVE_PREVIEW ? "Enabled" : "Disabled"}`))
-
-        await updateConversationContext(chatId, "user", prompt)
-
-        let gameChain, finalCode
-
-        if (ENABLE_NEW_CHAIN) {
-          console.log(chalk.cyan("Using new AI chain for web game generation..."))
-          gameChain = await llmProvider.generateWebGame(prompt, chatId)
-          finalCode = gameChain.webGameCode
-
-          await saveChatHistory(chatId, "groq_explanation", prompt, gameChain.groqExplanation)
-          await saveChatHistory(chatId, "mistral_plan", gameChain.groqExplanation, gameChain.mistralPlan)
-          await saveChatHistory(chatId, "groq_feedback", gameChain.mistralPlan, gameChain.groqFeedback)
-          await saveChatHistory(chatId, "anthropic_web_code", gameChain.groqFeedback, gameChain.webGameCode)
-        } else {
-          console.log(chalk.yellow("Using basic mode..."))
-          finalCode = `// Basic mode - simple web game structure
-const canvas = document.createElement('canvas');
-document.body.appendChild(canvas);
-console.log('${prompt} - Basic mode');`
-          gameChain = { finalCode }
-        }
-
-        await updateConversationContext(chatId, "assistant", finalCode)
-
-        const { projectId, projectName, projectDir, gameFiles } = await createWebGameProject(
-          finalCode,
-          gameChain,
-          prompt,
-          chatId,
-        )
-
-        const zipPath = await createProjectZip(projectDir, projectId)
-
-        console.log(chalk.green(`WEB GAME GENERATED WITH AI CHAIN - Chat ${chatId}!`))
-        console.log(chalk.green(`Project: ${projectName}`))
-        console.log(chalk.green(`Files: ${gameFiles.map((f) => f.name).join(", ")}`))
-        console.log(chalk.green(`Chain: Groq → Mistral → Groq (Checker) → Anthropic`))
-
-        res.json({
-          success: true,
-          chatId,
-          message: "Web game generated successfully with AI chain!",
-          project: {
-            id: projectId,
-            name: projectName,
-            directory: projectDir,
-            files: gameFiles.map((f) => ({ name: f.name, type: f.type })),
-          },
-          urls: {
-            download: `/download-project/${projectId}`,
-            preview: ENABLE_LIVE_PREVIEW ? `/preview/${projectId}` : null,
-            chatHistory: `/chat/${chatId}`,
-            langsmith: ENABLE_LANGSMITH_TRACING
-              ? `https://smith.langchain.com/projects/${process.env.LANGSMITH_PROJECT || "ClawCode-Unity-Generator"}`
-              : null,
-          },
-          chain: {
-            step1: "Groq - Game explanation and technical architecture",
-            step2: "Mistral - Implementation plan and class structure",
-            step3: "Groq - Implementation validation and feedback",
-            step4: "Anthropic - Final web game code generation",
-            completed: ENABLE_NEW_CHAIN,
-          },
-          tracing: {
-            enabled: ENABLE_LANGSMITH_TRACING,
-            project: process.env.LANGSMITH_PROJECT || "ClawCode-Unity-Generator",
-            newChain: ENABLE_NEW_CHAIN,
-          },
-          preview: {
-            enabled: ENABLE_LIVE_PREVIEW,
-            url: ENABLE_LIVE_PREVIEW ? `/preview/${projectId}` : null,
-          },
-          metadata: {
-            prompt,
-            timestamp: new Date().toISOString(),
-            architecture: "Groq → Mistral → Groq (Checker) → Anthropic → Web Game",
-            framework: "HTML5 Canvas + Modern JavaScript",
-            quality: "Production Ready Web Game with Modular Architecture",
-            fileStructure: "index.html, gameManager.js, audioManager.js, main.js, etc.",
-            featureFlags: {
-              newChain: ENABLE_NEW_CHAIN,
-              langsmithTracing: ENABLE_LANGSMITH_TRACING,
-              livePreview: ENABLE_LIVE_PREVIEW,
-            },
-          },
-        })
-      } catch (error) {
-        console.error(chalk.red(`Error in Chat ${chatId}:`, error.message))
-        res.status(500).json({
-          error: "Failed to generate web game",
-          details: error.message,
-          chatId,
-          success: false,
-        })
-      }
-    },
-    {
-      prompt: req.body.prompt,
-      chatId: chatId,
-    },
-    { operation: "complete-web-game-generation" },
-  )
-})
-
-// Download project endpoint
-app.get("/download-project/:projectId", async (req, res) => {
-  try {
-    const { projectId } = req.params
-    const zipPath = path.join(PROJECTS_DIR, `${projectId}.zip`)
-
-    if (!(await fs.pathExists(zipPath))) {
-      return res.status(404).json({ error: "Project not found" })
-    }
-
-    res.download(zipPath, `web-game-${projectId.slice(0, 8)}.zip`)
-  } catch (error) {
-    res.status(500).json({ error: "Failed to download project" })
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`)
+    res.write(`data: ${JSON.stringify({ ...data, timestamp: new Date().toISOString() })}\n\n`)
   }
-})
 
-// Get chat history
-app.get("/chat/:chatId", async (req, res) => {
   try {
-    const { chatId } = req.params
-    const chatFile = path.join(CHAT_HISTORY_DIR, `chat${chatId}.json`)
+    const { prompt } = req.body
 
-    if (!(await fs.pathExists(chatFile))) {
-      return res.status(404).json({ error: "Chat history not found" })
+    if (!prompt || !prompt.trim()) {
+      sendEvent("error", {
+        error: "Game description is required",
+        chatId,
+      })
+      res.end()
+      return
     }
 
-    const chatHistory = await fs.readJson(chatFile)
-    const conversationContext = conversationContexts.get(Number.parseInt(chatId)) || { messages: [] }
+    console.log(chalk.blue(`Starting SIMPLE chain generation for Chat ${chatId}`))
+    console.log(chalk.blue(`Game Request: ${prompt}`))
 
-    res.json({
+    sendEvent("progress", {
+      step: 0,
+      totalSteps: 2,
+      stepName: "Initialization",
+      progress: 0,
+      message: "Starting simple AI chain (Groq → Qwen3)...",
+    })
+
+    // Step 1: Groq explanation
+    sendEvent("progress", {
+      step: 1,
+      totalSteps: 2,
+      stepName: "Groq Architecture",
+      progress: 25,
+      message: "Getting comprehensive game explanation from Groq...",
+    })
+
+    const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId)
+
+    sendEvent("progress", {
+      step: 1,
+      totalSteps: 2,
+      stepName: "Groq Architecture",
+      progress: 50,
+      message: "Game architecture explanation completed",
+    })
+
+    // Step 2: Qwen3 code generation
+    sendEvent("progress", {
+      step: 2,
+      totalSteps: 2,
+      stepName: "Qwen3 Code Generation",
+      progress: 60,
+      message: "Generating clean, production-ready code with Qwen3...",
+    })
+
+    const qwenFinalCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId)
+
+    sendEvent("progress", {
+      step: 2,
+      totalSteps: 2,
+      stepName: "Qwen3 Code Generation",
+      progress: 80,
+      message: "Code generation completed, parsing files...",
+    })
+
+    // Parse and clean files
+    const validationResult = validateAndParseWebGameFiles(qwenFinalCode, chatId)
+    const completeFiles = createCompleteFileStructure(validationResult.files, validationResult.missingFiles, prompt)
+
+    // Stream each file
+    sendEvent("progress", {
+      step: 2,
+      totalSteps: 2,
+      stepName: "File Processing",
+      progress: 90,
+      message: `Streaming ${completeFiles.length} files...`,
+    })
+
+    completeFiles.forEach((file, index) => {
+      sendEvent("file_generated", {
+        fileName: file.name,
+        fileType: file.type,
+        content: file.content,
+        size: file.content.length,
+        index: index + 1,
+        totalFiles: completeFiles.length,
+      })
+    })
+
+    // Generate project metadata
+    const projectId = uuidv4()
+
+    // Save files to disk and setup project
+    sendEvent("progress", {
+      step: 2,
+      totalSteps: 2,
+      stepName: "Project Setup",
+      progress: 95,
+      message: "Saving files and setting up project...",
+    })
+
+    const projectPath = await saveGeneratedFiles(projectId, completeFiles)
+    const serverInfo = await setupAndRunProject(projectPath)
+
+    
+      sendEvent("complete", {
+        chatId,
+        projectId,
+        totalFiles: completeFiles.length,
+        aiGeneratedFiles: validationResult.files.length,
+        missingFilesGenerated: validationResult.missingFiles.length,
+        chainUsed: "simple",
+        chainSteps: ["Groq - Game explanation and architecture", "Qwen3 - Complete clean code generation"],
+        setupInstructions: {
+          npmInstall: "npm install",
+          startCommand: "npm start",
+          serveCommand: "npx serve . -p 3000",
+          url: serverInfo.url,
+          liveUrl: serverInfo.url,
+          port: serverInfo.port,
+          projectPath: projectPath
+        },
+        validation: {
+          isComplete: validationResult.isComplete,
+          totalFiles: completeFiles.length,
+          originalFiles: validationResult.files.length,
+          missingFiles: validationResult.missingFiles,
+        },
+      })
+      console.log(chalk.green(`SIMPLE chain completed for Chat ${chatId}!`))
+      console.log(chalk.green(`🎮 Game is running at: ${serverInfo.url}`))    
+  
+  } catch (error) {
+    console.error(chalk.red(`Error in Simple Chain Chat ${chatId}:`, error.message))
+    sendEvent("error", {
+      error: "Failed to generate web game",
+      details: error.message,
       chatId,
-      history: chatHistory,
-      conversationContext: conversationContext.messages,
-      chain: {
-        step1: "Groq - Game explanation and technical architecture",
-        step2: "Mistral - Implementation plan and class structure",
-        step3: "Groq - Implementation validation and feedback",
-        step4: "Anthropic - Final web game code generation",
+    })
+  }
+ 
+  res.end()
+  
+})
+
+/**
+ * @swagger
+ * /api/generate/full:
+ *   post:
+ *     summary: Generate web game using full 4-step AI chain (Groq → Qwen3 → Anthropic → Qwen3)
+ *     description: |
+ *       Streams the generation process of an HTML5 Canvas web game using the complete 4-step AI chain.
+ *       Returns Server-Sent Events (SSE) with progress updates and all generated files.
+ *
+ *       **Chain Steps:**
+ *       1. Groq (LLaMA 3.3 70B) - Game explanation and architecture
+ *       2. Qwen3 Coder - Initial complete code generation
+ *       3. Anthropic (Claude 3 Haiku) - Code validation and feedback
+ *       4. Qwen3 Coder - Final code fixes and improvements
+ *
+ *       **Stream Events:**
+ *       - `progress` - Progress updates with step information
+ *       - `step_complete` - Completion of individual chain steps
+ *       - `file_generated` - Individual file content as it's generated
+ *       - `complete` - Final completion with project metadata
+ *       - `error` - Error information if generation fails
+ *     tags:
+ *       - Game Generation
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/GamePrompt'
+ *           examples:
+ *             complex_game:
+ *               summary: Complex Game with Validation
+ *               value:
+ *                 prompt: "Create a complex Pac-Man game with HTML5 Canvas, maze navigation, ghost AI, power pellets, score system, and responsive mobile controls"
+ *     responses:
+ *       200:
+ *         description: Server-Sent Events stream with generation progress and files
+ *         content:
+ *           text/event-stream:
+ *             schema:
+ *               type: string
+ *               description: |
+ *                 Stream of events in Server-Sent Events format with additional step completion events:
+ *
+ *                 ```
+ *                 event: progress
+ *                 data: {"step": 3, "totalSteps": 4, "stepName": "Anthropic Validation", "progress": 75, "message": "Validating generated code..."}
+ *
+ *                 event: step_complete
+ *                 data: {"step": 3, "stepName": "Anthropic Validation", "output": "Code validation completed with 3 issues found"}
+ *
+ *                 event: file_generated
+ *                 data: {"fileName": "gameManager.js", "fileType": "js", "content": "class GameManager { ... }", "size": 3072}
+ *
+ *                 event: complete
+ *                 data: {"chatId": 124, "projectId": "uuid", "totalFiles": 10, "chainUsed": "full"}
+ *                 ```
+ *       400:
+ *         description: Invalid request - missing or invalid prompt
+ *       500:
+ *         description: Internal server error during generation
+ */
+app.post("/api/generate/full", async (req, res) => {
+  const chatId = chatCounter++
+
+  // Set up Server-Sent Events
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Cache-Control",
+  })
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`)
+    res.write(`data: ${JSON.stringify({ ...data, timestamp: new Date().toISOString() })}\n\n`)
+  }
+
+  try {
+    const { prompt } = req.body
+
+    if (!prompt || !prompt.trim()) {
+      sendEvent("error", {
+        error: "Game description is required",
+        chatId,
+      })
+      res.end()
+      return
+    }
+
+    console.log(chalk.blue(`Starting FULL chain generation for Chat ${chatId}`))
+    console.log(chalk.blue(`Game Request: ${prompt}`))
+
+    sendEvent("progress", {
+      step: 0,
+      totalSteps: 4,
+      stepName: "Initialization",
+      progress: 0,
+      message: "Starting full AI chain (Groq → Qwen3 → Anthropic → Qwen3)...",
+    })
+
+    // Step 1: Groq explanation
+    sendEvent("progress", {
+      step: 1,
+      totalSteps: 4,
+      stepName: "Groq Architecture",
+      progress: 10,
+      message: "Getting comprehensive game explanation from Groq...",
+    })
+
+    const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId)
+
+    sendEvent("step_complete", {
+      step: 1,
+      stepName: "Groq Architecture",
+      output: `Game architecture explanation completed (${groqExplanation.length} characters)`,
+    })
+
+    // Step 2: Qwen3 initial code
+    sendEvent("progress", {
+      step: 2,
+      totalSteps: 4,
+      stepName: "Qwen3 Initial Code",
+      progress: 30,
+      message: "Generating initial complete code with Qwen3...",
+    })
+
+    const qwenInitialCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId)
+
+    sendEvent("step_complete", {
+      step: 2,
+      stepName: "Qwen3 Initial Code",
+      output: `Initial code generation completed (${qwenInitialCode.length} characters)`,
+    })
+
+    // Step 3: Anthropic validation
+    sendEvent("progress", {
+      step: 3,
+      totalSteps: 4,
+      stepName: "Anthropic Validation",
+      progress: 60,
+      message: "Validating code with Anthropic and providing feedback...",
+    })
+
+    const anthropicFeedback = await llmProvider.validateWithAnthropic(qwenInitialCode, prompt, chatId)
+
+    sendEvent("step_complete", {
+      step: 3,
+      stepName: "Anthropic Validation",
+      output: `Code validation completed with detailed feedback (${anthropicFeedback.length} characters)`,
+    })
+
+    // Step 4: Qwen3 final fixes
+    sendEvent("progress", {
+      step: 4,
+      totalSteps: 4,
+      stepName: "Qwen3 Final Fixes",
+      progress: 80,
+      message: "Generating final fixed code with Qwen3...",
+    })
+
+    const qwenFinalCode = await llmProvider.generateFinalCodeWithQwen(
+      anthropicFeedback,
+      qwenInitialCode,
+      prompt,
+      chatId,
+    )
+
+    sendEvent("step_complete", {
+      step: 4,
+      stepName: "Qwen3 Final Fixes",
+      output: `Final code generation completed (${qwenFinalCode.length} characters)`,
+    })
+
+    // Parse and clean files
+    sendEvent("progress", {
+      step: 4,
+      totalSteps: 4,
+      stepName: "File Processing",
+      progress: 90,
+      message: "Parsing and cleaning generated files...",
+    })
+
+    const validationResult = validateAndParseWebGameFiles(qwenFinalCode, chatId)
+    const completeFiles = createCompleteFileStructure(validationResult.files, validationResult.missingFiles, prompt)
+
+    // Stream each file
+    sendEvent("progress", {
+      step: 4,
+      totalSteps: 4,
+      stepName: "File Streaming",
+      progress: 95,
+      message: `Streaming ${completeFiles.length} files...`,
+    })
+
+    completeFiles.forEach((file, index) => {
+      sendEvent("file_generated", {
+        fileName: file.name,
+        fileType: file.type,
+        content: file.content,
+        size: file.content.length,
+        index: index + 1,
+        totalFiles: completeFiles.length,
+      })
+    })
+
+    // Generate project metadata
+    const projectId = uuidv4()
+
+    // Save files to disk and setup project
+    sendEvent("progress", {
+      step: 4,
+      totalSteps: 4,
+      stepName: "Project Setup",
+      progress: 98,
+      message: "Saving files and setting up project...",
+    })
+
+    const projectPath = await saveGeneratedFiles(projectId, completeFiles)
+    const serverInfo = await setupAndRunProject(projectPath)
+
+    sendEvent("complete", {
+      chatId,
+      projectId,
+      totalFiles: completeFiles.length,
+      aiGeneratedFiles: validationResult.files.length,
+      missingFilesGenerated: validationResult.missingFiles.length,
+      chainUsed: "full",
+      chainSteps: [
+        "Groq - Game explanation and architecture",
+        "Qwen3 - Initial complete code generation",
+        "Anthropic - Code validation and feedback",
+        "Qwen3 - Final code fixes and improvements",
+      ],
+      setupInstructions: {
+        npmInstall: "npm install",
+        startCommand: "npm start",
+        serveCommand: "npx serve . -p 3000",
+        url: serverInfo.url,
+        liveUrl: serverInfo.url,
+        port: serverInfo.port,
+        projectPath: projectPath
       },
-      tracing: {
-        enabled: ENABLE_LANGSMITH_TRACING,
-        project: process.env.LANGSMITH_PROJECT || "ClawCode-Unity-Generator",
+      validation: {
+        isComplete: validationResult.isComplete,
+        totalFiles: completeFiles.length,
+        originalFiles: validationResult.files.length,
+        missingFiles: validationResult.missingFiles,
+      },
+      chainDetails: {
+        groqExplanationLength: groqExplanation.length,
+        qwenInitialCodeLength: qwenInitialCode.length,
+        anthropicFeedbackLength: anthropicFeedback.length,
+        qwenFinalCodeLength: qwenFinalCode.length,
       },
     })
+
+    console.log(chalk.green(`FULL chain completed for Chat ${chatId}!`))
+    console.log(chalk.green(`🎮 Game is running at: ${serverInfo.url}`))
   } catch (error) {
-    res.status(500).json({ error: "Failed to load chat history" })
+    console.error(chalk.red(`Error in Full Chain Chat ${chatId}:`, error.message))
+    sendEvent("error", {
+      error: "Failed to generate web game",
+      details: error.message,
+      chatId,
+    })
   }
+
+  res.end()
 })
 
-// Health check
-app.get("/health", (req, res) => {
+// ============================================================================
+// ADDITIONAL API ENDPOINTS
+// ============================================================================
+
+/**
+ * @swagger
+ * /api/health:
+ *   get:
+ *     summary: Health check endpoint
+ *     description: Returns the current status of the API and all connected services
+ *     tags:
+ *       - System
+ *     responses:
+ *       200:
+ *         description: API is healthy and all services are operational
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "healthy"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                 chatCounter:
+ *                   type: integer
+ *                   description: Number of chat sessions processed
+ *                 services:
+ *                   type: object
+ *                   properties:
+ *                     groq:
+ *                       type: boolean
+ *                       description: Groq API availability
+ *                     anthropic:
+ *                       type: boolean
+ *                       description: Anthropic API availability
+ *                     openrouter:
+ *                       type: boolean
+ *                       description: OpenRouter API availability
+ *                     langsmith:
+ *                       type: boolean
+ *                       description: LangSmith tracing availability
+ *                 chains:
+ *                   type: object
+ *                   properties:
+ *                     simple:
+ *                       type: string
+ *                       example: "Groq → Qwen3"
+ *                     full:
+ *                       type: string
+ *                       example: "Groq → Qwen3 → Anthropic → Qwen3"
+ */
+app.get("/api/health", (req, res) => {
   res.json({
     status: "healthy",
     timestamp: new Date().toISOString(),
@@ -1410,746 +1553,555 @@ app.get("/health", (req, res) => {
       openrouter: Boolean(process.env.OPENROUTER_API_KEY),
       langsmith: Boolean(process.env.LANGSMITH_API_KEY),
     },
-    chain: {
-      step1: "Groq (LLaMA 3.3 70B) - Game explanation",
-      step2: "Mistral 7B - Implementation plan",
-      step3: "Groq (LLaMA 3.3 70B) - Implementation validation",
-      step4: "Anthropic (Claude 3 Haiku) - Web game code generation",
+    chains: {
+      simple: "Groq → Qwen3 (2 steps)",
+      full: "Groq → Qwen3 → Anthropic → Qwen3 (4 steps)",
     },
-    tracing: {
-      enabled: ENABLE_LANGSMITH_TRACING,
-      project: process.env.LANGSMITH_PROJECT || "ClawCode-Unity-Generator",
-      endpoint: process.env.LANGSMITH_ENDPOINT || "https://api.smith.langchain.com",
-    },
-    framework: "HTML5 Canvas + Modern JavaScript",
-    quality: "Production Ready Web Games with Modular Architecture",
-    fileStructure: "index.html, gameManager.js, audioManager.js, main.js, etc.",
-    featureFlags: {
-      newChain: ENABLE_NEW_CHAIN,
-      langsmithTracing: ENABLE_LANGSMITH_TRACING,
-      livePreview: ENABLE_LIVE_PREVIEW,
+    features: {
+      streaming: true,
+      fileGeneration: true,
+      codeCleanup: true,
+      npmSetup: true,
     },
   })
 })
 
-// Enhanced web interface - Fixed template literal issues
+/**
+ * @swagger
+ * /:
+ *   get:
+ *     summary: API documentation and testing interface
+ *     description: Returns an HTML interface for testing the streaming API endpoints
+ *     tags:
+ *       - System
+ *     responses:
+ *       200:
+ *         description: HTML testing interface
+ *         content:
+ *           text/html:
+ *             schema:
+ *               type: string
+ */
 app.get("/", (req, res) => {
-  const htmlContent = `<!DOCTYPE html>
-<html lang="en">
+  res.send(`<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Game AI Generator - Groq Checker Chain</title>
+    <title>Web Game AI Generator - Streaming API</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
-            min-height: 100vh;
-            padding: 20px;
-            color: white;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: rgba(255, 255, 255, 0.05);
-            padding: 40px;
-            border-radius: 20px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 140, 0, 0.2);
-        }
-        
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-        }
-        
-        h1 {
-            color: #ff8c00;
-            font-size: 3em;
-            margin-bottom: 10px;
-            background: linear-gradient(135deg, #ff8c00 0%, #ff6600 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            text-shadow: 0 0 30px rgba(255, 140, 0, 0.3);
-        }
-        
-        .subtitle {
-            color: #888;
-            font-size: 1.2em;
-            font-weight: 300;
-        }
-        
-        .chain-banner {
-            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 30px;
-            text-align: center;
-            border: 1px solid rgba(76, 175, 80, 0.3);
-        }
-        
-        .chain-banner h3 {
-            color: white;
-            margin-bottom: 10px;
-            font-size: 1.5em;
-        }
-        
-        .chain-steps {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 15px;
-        }
-        
-        .chain-step {
-            background: rgba(255, 255, 255, 0.2);
-            padding: 8px 15px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        .chain-arrow {
-            color: #ffff00;
-            font-size: 18px;
-            font-weight: bold;
-        }
-        
-        .preview-banner {
-            background: linear-gradient(135deg, #9C27B0 0%, #673AB7 100%);
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 30px;
-            text-align: center;
-            border: 1px solid rgba(156, 39, 176, 0.3);
-        }
-        
-        .preview-banner h3 {
-            color: white;
-            margin-bottom: 5px;
-        }
-        
-        .preview-banner p {
-            color: rgba(255, 255, 255, 0.9);
-            font-size: 14px;
-        }
-        
-        .feature-flags {
-            background: rgba(255, 165, 0, 0.1);
-            border: 1px solid rgba(255, 165, 0, 0.3);
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 30px;
-            text-align: center;
-        }
-        
-        .feature-flags h3 {
-            color: #ffaa00;
-            margin-bottom: 10px;
-        }
-        
-        .flag-status {
-            display: inline-block;
-            margin: 0 8px;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-size: 12px;
-        }
-        
-        .flag-enabled {
-            background: rgba(0, 255, 0, 0.2);
-            color: #00ff88;
-        }
-        
-        .flag-disabled {
-            background: rgba(255, 0, 0, 0.2);
-            color: #ff6666;
-        }
-        
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
-        }
-        
-        .feature {
-            background: rgba(255, 140, 0, 0.1);
-            padding: 20px;
-            border-radius: 15px;
-            text-align: center;
-            border: 1px solid rgba(255, 140, 0, 0.3);
-            transition: all 0.3s ease;
-        }
-        
-        .feature:hover {
-            background: rgba(255, 140, 0, 0.2);
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(255, 140, 0, 0.2);
-        }
-        
-        .feature-icon {
-            font-size: 2em;
-            margin-bottom: 10px;
-        }
-        
-        .form-group {
-            margin-bottom: 30px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 10px;
-            font-weight: 600;
-            color: #ff8c00;
-            font-size: 1.1em;
-        }
-        
-        textarea {
-            width: 100%;
-            padding: 20px;
-            border: 2px solid rgba(255, 140, 0, 0.3);
-            border-radius: 15px;
-            font-size: 16px;
-            font-family: inherit;
-            resize: vertical;
-            min-height: 150px;
-            transition: all 0.3s ease;
-            background: rgba(0, 0, 0, 0.3);
-            color: white;
-        }
-        
-        textarea:focus {
-            outline: none;
-            border-color: #ff8c00;
-            background: rgba(0, 0, 0, 0.5);
-            box-shadow: 0 0 20px rgba(255, 140, 0, 0.2);
-        }
-        
-        button {
-            background: linear-gradient(135deg, #ff8c00 0%, #ff6600 100%);
-            color: white;
-            padding: 20px 40px;
-            border: none;
-            border-radius: 15px;
-            cursor: pointer;
-            font-size: 18px;
-            font-weight: 600;
-            width: 100%;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 30px rgba(255, 140, 0, 0.4);
-        }
-        
-        button:disabled {
-            background: #333;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .result {
-            margin-top: 40px;
-            padding: 30px;
-            border-radius: 15px;
-            animation: slideIn 0.5s ease;
-        }
-        
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(30px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .success {
-            background: rgba(0, 255, 0,0.1);
-            border: 2px solid rgba(0, 255, 0, 0.3);
-            color: #00ff88;
-        }
-        
-        .error {
-            background: rgba(255, 0, 0, 0.1);
-            border: 2px solid rgba(255, 0, 0, 0.3);
-            color: #ff6666;
-        }
-        
-        .loading {
-            background: rgba(255, 165, 0, 0.1);
-            border: 2px solid rgba(255, 165, 0, 0.3);
-            color: #ffaa00;
-        }
-        
-        .links {
-            margin-top: 20px;
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-        
-        .links a {
-            display: inline-block;
-            padding: 12px 24px;
-            background: rgba(0, 255, 0, 0.2);
-            color: #00ff88;
-            text-decoration: none;
-            border-radius: 10px;
-            font-weight: 500;
-            transition: all 0.3s ease;
-            border: 1px solid rgba(0, 255, 0, 0.3);
-        }
-        
-        .links a:hover {
-            background: rgba(0, 255, 0, 0.3);
-            transform: translateY(-2px);
-        }
-        
-        .download-link {
-            background: rgba(255, 140, 0, 0.2) !important;
-            color: #ff8c00 !important;
-            border-color: rgba(255, 140, 0, 0.3) !important;
-        }
-        
-        .preview-link {
-            background: rgba(156, 39, 176, 0.2) !important;
-            color: #9C27B0 !important;
-            border-color: rgba(156, 39, 176, 0.3) !important;
-        }
-        
-        .langsmith-link {
-            background: rgba(76, 175, 80, 0.2) !important;
-            color: #4CAF50 !important;
-            border-color: rgba(76, 175, 80, 0.3) !important;
-        }
-        
-        .examples {
-            margin-top: 30px;
-            padding: 30px;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 15px;
-            border-left: 5px solid #ff8c00;
-        }
-        
-        .examples h3 {
-            color: #ff8c00;
-            margin-bottom: 20px;
-            font-size: 1.3em;
-        }
-        
-        .example-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 15px;
-        }
-        
-        .example-item {
-            padding: 15px;
-            background: rgba(255, 140, 0, 0.1);
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            border: 1px solid rgba(255, 140, 0, 0.2);
-        }
-        
-        .example-item:hover {
-            background: rgba(255, 140, 0, 0.2);
-            transform: translateY(-3px);
-            box-shadow: 0 5px 20px rgba(255, 140, 0, 0.3);
-        }
-        
-        .progress-bar {
-            width: 100%;
-            height: 6px;
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 3px;
-            overflow: hidden;
-            margin: 20px 0;
-        }
-        
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #ff8c00, #ff6600);
-            width: 0%;
-            transition: width 0.3s ease;
-        }
-        
-        .file-structure {
-            background: rgba(0, 0, 0, 0.3);
-            padding: 15px;
-            border-radius: 10px;
-            margin: 15px 0;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            border-left: 3px solid #ff8c00;
-        }
-        
-        @media (max-width: 768px) {
-            .container {
-                padding: 20px;
-                margin: 10px;
-            }
-            
-            h1 {
-                font-size: 2em;
-            }
-            
-            .features {
-                grid-template-columns: 1fr;
-            }
-            
-            .links {
-                flex-direction: column;
-            }
-            
-            .example-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .chain-steps {
-                flex-direction: column;
-            }
-        }
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #1a1a2e; color: white; }
+        h1 { color: #ff8c00; text-align: center; }
+        .api-section { background: #2a2a3e; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .api-section h3 { color: #4CAF50; margin-top: 0; }
+        .endpoint { background: #333; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        .method { display: inline-block; padding: 5px 10px; border-radius: 3px; font-weight: bold; margin-right: 10px; }
+        .post { background: #ff6b35; }
+        .get { background: #4CAF50; }
+        .form-group { margin: 15px 0; }
+        label { display: block; margin-bottom: 5px; color: #ff8c00; font-weight: bold; }
+        textarea, select { width: 100%; padding: 10px; background: #444; color: white; border: 1px solid #666; border-radius: 5px; }
+        button { background: #ff8c00; color: white; padding: 12px 25px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }
+        button:hover { background: #ff6600; }
+        button:disabled { background: #666; cursor: not-allowed; }
+        .output { background: #222; padding: 15px; border-radius: 5px; margin-top: 15px; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 14px; }
+        .event { margin: 5px 0; padding: 8px; border-left: 3px solid #4CAF50; background: rgba(76, 175, 80, 0.1); }
+        .error { border-left-color: #f44336; background: rgba(244, 67, 54, 0.1); }
+        .file { border-left-color: #2196F3; background: rgba(33, 150, 243, 0.1); }
+        .complete { border-left-color: #ff8c00; background: rgba(255, 140, 0, 0.1); }
+        .links { margin-top: 20px; text-align: center; }
+        .links a { display: inline-block; margin: 10px; padding: 15px 25px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+        .links a:hover { background: #0056b3; }
+        .game-url { color: #4CAF50; font-weight: bold; text-decoration: underline; cursor: pointer; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>Web Game AI Generator</h1>
-            <p class="subtitle">Generate production-ready web games with Groq Checker Chain + Live Preview</p>
+    <h1>🚀 Web Game AI Generator - Streaming API</h1>
+    
+    <div class="api-section">
+        <h3>📡 Available Endpoints</h3>
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <strong>/api/generate/simple</strong> - 2-Step Chain (Groq → Qwen3)
+            <p>Fast generation with clean code output. No validation step.</p>
         </div>
-        
-        <div class="chain-banner">
-            <h3>AI Generation Chain with Groq Checker</h3>
-            <p>Complete 4-step AI pipeline with validation and LangSmith tracing</p>
-            <div class="chain-steps">
-                <div class="chain-step">1. Groq (LLaMA 3.3 70B)</div>
-                <div class="chain-arrow">→</div>
-                <div class="chain-step">2. Mistral 7B</div>
-                <div class="chain-arrow">→</div>
-                <div class="chain-step">3. Groq Checker</div>
-                <div class="chain-arrow">→</div>
-                <div class="chain-step">4. Anthropic (Claude 3 Haiku)</div>
-            </div>
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <strong>/api/generate/full</strong> - 4-Step Chain (Groq → Qwen3 → Anthropic → Qwen3)
+            <p>Complete generation with validation and fixes. Higher quality output.</p>
         </div>
-        
-        <div class="preview-banner">
-            <h3>Live Preview Ready</h3>
-            <p>Generated games include instant live preview links - play immediately in your browser!</p>
+        <div class="endpoint">
+            <span class="method get">GET</span>
+            <strong>/api/health</strong> - Health Check
+            <p>Check API status and service availability.</p>
         </div>
-        
-        <div class="feature-flags">
-            <h3>Current Feature Flags</h3>
-            <span class="flag-status flag-${ENABLE_NEW_CHAIN ? "enabled" : "disabled"}">
-                New AI Chain: ${ENABLE_NEW_CHAIN ? "ON" : "OFF"}
-            </span>
-            <span class="flag-status flag-${ENABLE_LANGSMITH_TRACING ? "enabled" : "disabled"}">
-                LangSmith Tracing: ${ENABLE_LANGSMITH_TRACING ? "ON" : "OFF"}
-            </span>
-            <span class="flag-status flag-${ENABLE_LIVE_PREVIEW ? "enabled" : "disabled"}">
-                Live Preview: ${ENABLE_LIVE_PREVIEW ? "ON" : "OFF"}
-            </span>
+        <div class="endpoint">
+            <span class="method get">GET</span>
+            <strong>/api-docs</strong> - Swagger Documentation
+            <p>Complete OpenAPI documentation with interactive testing.</p>
         </div>
-        
-        <div class="features">
-            <div class="feature">
-                <div class="feature-icon">🎮</div>
-                <h3>HTML5 Canvas Games</h3>
-                <p>Professional game architecture with modular classes</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🔗</div>
-                <h3>Groq Checker Chain</h3>
-                <p>4-step AI generation with Groq validation</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">👁️</div>
-                <h3>Live Preview</h3>
-                <p>Instant playable games in your browser</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">📁</div>
-                <h3>Complete File Structure</h3>
-                <p>10+ modular files with proper organization</p>
-            </div>
-        </div>
-        
-        <form id="gameForm">
+    </div>
+    
+    <div class="api-section">
+        <h3>🧪 Test Streaming API</h3>
+        <form id="testForm">
             <div class="form-group">
-                <label for="prompt">Describe Your Web Game:</label>
-                <textarea id="prompt" placeholder="Create a Snake game with HTML5 Canvas, responsive design, smooth gameplay, score system, and mobile touch controls. Include proper collision detection and increasing difficulty." required></textarea>
+                <label>API Endpoint:</label>
+                <select id="endpoint">
+                    <option value="/api/generate/simple">Simple Chain (2 steps)</option>
+                    <option value="/api/generate/full">Full Chain (4 steps)</option>
+                </select>
             </div>
-            
-            <button type="submit" id="generateBtn">Generate Web Game with Groq Checker Chain + Live Preview</button>
+            <div class="form-group">
+                <label>Game Description:</label>
+                <textarea id="prompt" rows="4" placeholder="Create a Snake game with HTML5 Canvas, smooth movement, food collection, score system, collision detection, and responsive mobile controls..."></textarea>
+            </div>
+            <button type="submit" id="generateBtn">🚀 Start Streaming Generation</button>
+            <button type="button" id="clearBtn">🗑️ Clear Output</button>
         </form>
-
-        <div class="examples">
-            <h3>Web Game Examples with Live Preview:</h3>
-            <div class="example-grid">
-                <div class="example-item" onclick="setPrompt('Create a Snake game with HTML5 Canvas, grid-based movement, food collection, score system, collision detection, and responsive mobile controls')">
-                    <strong>Snake Game</strong><br>
-                    Classic snake with modern web tech + live preview
-                </div>
-                <div class="example-item" onclick="setPrompt('Build a Tetris game with HTML5 Canvas, piece rotation, line clearing, increasing difficulty, score system, and responsive design for all devices')">
-                    <strong>Tetris Game</strong><br>
-                    Puzzle game with physics + instant preview
-                </div>
-                <div class="example-item" onclick="setPrompt('Design a Flappy Bird game with smooth animations, physics simulation, obstacle generation, score tracking, and touch controls for mobile')">
-                    <strong>Flappy Bird Game</strong><br>
-                    Physics-based flying + live gameplay
-                </div>
-                <div class="example-item" onclick="setPrompt('Create a Pong game with HTML5 Canvas, paddle physics, ball bouncing, AI opponent, score system, and responsive controls')">
-                    <strong>Pong Game</strong><br>
-                    Classic paddle game + AI opponent
-                </div>
-                <div class="example-item" onclick="setPrompt('Make a Pac-Man game with maze navigation, ghost AI, pellet collection, power-ups, score system, and retro styling')">
-                    <strong>Pac-Man Game</strong><br>
-                    Maze game with AI ghosts + preview
-                </div>
-                <div class="example-item" onclick="setPrompt('Build a Space Invaders game with shooting mechanics, enemy waves, power-ups, particle effects, score system, and responsive design')">
-                    <strong>Space Invaders Game</strong><br>
-                    Classic shooter with effects + live play
-                </div>
-            </div>
-        </div>
         
-        <div id="result"></div>
+        <div id="output" class="output" style="display: none;">
+            <div id="events"></div>
+        </div>
+    </div>
+    
+    <div class="links">
+        <a href="/api-docs" target="_blank">📚 Swagger Documentation</a>
+        <a href="/api/health" target="_blank">🏥 Health Check</a>
+        <a href="https://github.com/your-repo" target="_blank">📦 GitHub Repository</a>
     </div>
 
     <script>
-        function setPrompt(text) {
-            document.getElementById('prompt').value = text;
-            document.getElementById('prompt').focus();
-        }
-
-        document.getElementById('gameForm').addEventListener('submit', async (e) => {
+        let eventSource = null;
+        let fileCount = 0;
+        
+        document.getElementById('testForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
+            const endpoint = document.getElementById('endpoint').value;
             const prompt = document.getElementById('prompt').value;
             const generateBtn = document.getElementById('generateBtn');
-            const result = document.getElementById('result');
+            const output = document.getElementById('output');
+            const events = document.getElementById('events');
+            
+            if (!prompt.trim()) {
+                alert('Please enter a game description');
+                return;
+            }
+            
+            // Close existing connection
+            if (eventSource) {
+                eventSource.close();
+            }
             
             generateBtn.disabled = true;
-            generateBtn.textContent = 'Generating Web Game with Groq Checker Chain...';
-            
-            result.innerHTML = \`
-                <div class="result loading">
-                    <h3>Creating Your Web Game with Groq Checker Chain + Live Preview...</h3>
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill"></div>
-                    </div>
-                    <p id="statusText">Initializing AI chain generation...</p>
-                    <ul style="margin-top: 20px; text-align: left;">
-                        <li>Starting LangSmith tracing session</li>
-                        <li>Step 1: Groq explains game mechanics and architecture</li>
-                        <li>Step 2: Mistral creates implementation plan and class structure</li>
-                        <li>Step 3: Groq validates implementation and provides feedback</li>
-                        <li>Step 4: Anthropic generates final web game code with all files</li>
-                        <li>Creating comprehensive modular file structure</li>
-                        <li>Setting up live preview functionality</li>
-                        <li>Finalizing LangSmith observability data</li>
-                    </ul>
-                </div>
-            \`;
-            
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                progress += Math.random() * 8;
-                if (progress > 90) progress = 90;
-                document.getElementById('progressFill').style.width = progress + '%';
-                
-                if (progress < 15) {
-                    document.getElementById('statusText').textContent = 'Starting LangSmith tracing session...';
-                } else if (progress < 30) {
-                    document.getElementById('statusText').textContent = 'Step 1: Groq explaining game architecture...';
-                } else if (progress < 45) {
-                    document.getElementById('statusText').textContent = 'Step 2: Mistral creating class structure...';
-                } else if (progress < 60) {
-                    document.getElementById('statusText').textContent = 'Step 3: Groq validating implementation...';
-                } else if (progress < 75) {
-                    document.getElementById('statusText').textContent = 'Step 4: Anthropic generating complete game code...';
-                } else if (progress < 85) {
-                    document.getElementById('statusText').textContent = 'Creating comprehensive file structure...';
-                } else {
-                    document.getElementById('statusText').textContent = 'Setting up live preview functionality...';
-                }
-            }, 600);
+            generateBtn.textContent = '🔄 Generating...';
+            output.style.display = 'block';
+            events.innerHTML = '<div class="event">🚀 Starting generation...</div>';
+            fileCount = 0;
             
             try {
-                const response = await fetch('/generate', {
+                // Start Server-Sent Events connection
+                eventSource = new EventSource(\`\${endpoint}?\${new URLSearchParams({ prompt })}\`);
+                
+                // For POST request, we need to use fetch with EventSource simulation
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ prompt }),
+                    body: JSON.stringify({ prompt })
                 });
                 
-                const data = await response.json();
-                clearInterval(progressInterval);
-                
-                if (data.success) {
-                    document.getElementById('progressFill').style.width = '100%';
-                    
-                    setTimeout(() => {
-                        result.innerHTML = \`
-                            <div class="result success">
-                                <h3>Web Game Generated Successfully with Groq Checker Chain + Live Preview!</h3>
-                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0;">
-                                    <div>
-                                        <strong>Chat ID:</strong> \${data.chatId}<br>
-                                        <strong>Project:</strong> \${data.project.name}<br>
-                                        <strong>Framework:</strong> \${data.metadata.framework}
-                                    </div>
-                                    <div>
-                                        <strong>AI Chain:</strong> \${data.chain.completed ? 'Completed' : 'Partial'}<br>
-                                        <strong>Live Preview:</strong> \${data.preview.enabled ? 'Ready' : 'Disabled'}<br>
-                                        <strong>Tracing:</strong> \${data.tracing.enabled ? 'LangSmith Enabled' : 'Disabled'}
-                                    </div>
-                                </div>
-                                
-                                <div class="file-structure">
-                                    <strong>Generated File Structure:</strong><br>
-                                    \${data.project.files ? data.project.files.map(f => \`• \${f.name} (\${f.type})\`).join('<br>') : 'Standard web game files'}
-                                </div>
-                                
-                                <div style="background: rgba(76, 175, 80, 0.1); padding: 15px; border-radius: 10px; margin: 20px 0;">
-                                    <h4 style="color: #4CAF50; margin-bottom: 10px;">Groq Checker Chain Steps Completed:</h4>
-                                    <div style="font-size: 14px;">
-                                        <div>✅ \${data.chain.step1}</div>
-                                        <div>✅ \${data.chain.step2}</div>
-                                        <div>✅ \${data.chain.step3}</div>
-                                        <div>✅ \${data.chain.step4}</div>
-                                    </div>
-                                </div>
-                                
-                                <div class="links">
-                                    \${data.urls.preview ? \`<a href="\${data.urls.preview}" target="_blank" class="preview-link">Play Live Preview</a>\` : ''}
-                                    <a href="\${data.urls.download}" download class="download-link">Download Project</a>
-                                    <a href="\${data.urls.chatHistory}" target="_blank">View Chain History</a>
-                                    \${data.urls.langsmith ? \`<a href="\${data.urls.langsmith}" target="_blank" class="langsmith-link">View LangSmith Traces</a>\` : ''}
-                                </div>
-                                <div style="margin-top: 20px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 10px; font-size: 14px;">
-                                    <strong>Web Game Features:</strong><br>
-                                    • HTML5 Canvas with 60fps rendering<br>
-                                    • Comprehensive modular JavaScript architecture<br>
-                                    • Complete file structure with 10+ files<br>
-                                    • GameManager.js for core game logic<br>
-                                    • AudioManager.js for Web Audio API sounds<br>
-                                    • UIManager.js for interface management<br>
-                                    • InputManager.js for centralized input handling<br>
-                                    • Renderer.js for canvas drawing utilities<br>
-                                    • GameObjects.js for entity classes<br>
-                                    • Utils.js and Config.js for helpers and settings<br>
-                                    • main.js for proper initialization<br>
-                                    • index.html with complete responsive design<br>
-                                    • Touch controls + keyboard input<br>
-                                    • Live preview ready - play instantly!<br>
-                                    • Complete Groq Checker Chain: Groq → Mistral → Groq → Anthropic<br>
-                                    • Full LangSmith tracing and observability<br><br>
-                                    <strong>Quick Start:</strong><br>
-                                    1. Click "Play Live Preview" to play immediately<br>
-                                    2. Download project for local development<br>
-                                    3. Open index.html in any modern browser<br>
-                                    4. Customize code in separate modular files<br><br>
-                                    <strong>Feature Flags Used:</strong><br>
-                                    • New AI Chain: \${data.metadata.featureFlags?.newChain ? 'Enabled' : 'Disabled'}<br>
-                                    • LangSmith Tracing: \${data.metadata.featureFlags?.langsmithTracing ? 'Enabled' : 'Disabled'}<br>
-                                    • Live Preview: \${data.metadata.featureFlags?.livePreview ? 'Enabled' : 'Disabled'}
-                                </div>
-                            </div>
-                        \`;
-                    }, 500);
-                } else {
-                    result.innerHTML = \`
-                        <div class="result error">
-                            <h3>Generation Failed</h3>
-                            <p>\${data.error}</p>
-                            <p><strong>Chat ID:</strong> \${data.chatId || 'N/A'}</p>
-                            <p>Please try again with a different web game description.</p>
-                        </div>
-                    \`;
+                if (!response.ok) {
+                    throw new Error(\`HTTP \${response.status}: \${response.statusText}\`);
                 }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            const eventType = line.substring(7);
+                        } else if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+                                handleStreamEvent(eventType || 'message', data);
+                            } catch (e) {
+                                console.warn('Failed to parse event data:', line);
+                            }
+                        }
+                    }
+                }
+                
             } catch (error) {
-                clearInterval(progressInterval);
-                result.innerHTML = \`
-                    <div class="result error">
-                        <h3>Network Error</h3>
-                        <p>\${error.message}</p>
-                        <p>Please check your connection and try again.</p>
-                    </div>
-                \`;
+                events.innerHTML += \`<div class="event error">❌ Error: \${error.message}</div>\`;
+            } finally {
+                generateBtn.disabled = false;
+                generateBtn.textContent = '🚀 Start Streaming Generation';
             }
-
-            generateBtn.disabled = false;
-            generateBtn.textContent = 'Generate Web Game with Groq Checker Chain + Live Preview';
         });
+        
+        function handleStreamEvent(eventType, data) {
+            const events = document.getElementById('events');
+            let eventHtml = '';
+            
+            switch (eventType) {
+                case 'progress':
+                    eventHtml = \`<div class="event">📊 Progress: Step \${data.step}/\${data.totalSteps} - \${data.stepName} (\${data.progress}%) - \${data.message}</div>\`;
+                    break;
+                    
+                case 'step_complete':
+                    eventHtml = \`<div class="event">✅ Step \${data.step} Complete: \${data.stepName} - \${data.output}</div>\`;
+                    break;
+                    
+                case 'file_generated':
+                    fileCount++;
+                    eventHtml = \`<div class="event file">📄 File \${fileCount}: \${data.fileName} (\${data.fileType}, \${data.size} chars)</div>\`;
+                    break;
+                    
+                case 'complete':
+                    eventHtml = \`<div class="event complete">🎉 Generation Complete! Chat ID: \${data.chatId}, Files: \${data.totalFiles}, Chain: \${data.chainUsed}</div>\`;
+                    if (data.setupInstructions && data.setupInstructions.liveUrl) {
+                        eventHtml += \`<div class="event complete">🎮 Game is now running at: <a href="\${data.setupInstructions.liveUrl}" target="_blank" class="game-url">\${data.setupInstructions.liveUrl}</a></div>\`;
+                    }
+                    eventHtml += \`<div class="event complete">🛠️ Setup: \${data.setupInstructions.npmInstall} → \${data.setupInstructions.startCommand}</div>\`;
+                    break;
+                    
+                case 'error':
+                    eventHtml = \`<div class="event error">❌ Error: \${data.error} - \${data.details || ''}</div>\`;
+                    break;
+                    
+                default:
+                    eventHtml = \`<div class="event">📨 \${eventType}: \${JSON.stringify(data)}</div>\`;
+            }
+            
+            events.innerHTML += eventHtml;
+            events.scrollTop = events.scrollHeight;
+        }
+        
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            document.getElementById('events').innerHTML = '';
+            document.getElementById('output').style.display = 'none';
+            fileCount = 0;
+        });
+        
+        // Set default prompt
+        document.getElementById('prompt').value = 'Create a Snake game with HTML5 Canvas, smooth movement, food collection, score system, collision detection, and responsive mobile controls';
     </script>
 </body>
-</html>`;
+</html>`)
+})
 
-  res.send(htmlContent);
-});
+
+/**
+ * @swagger
+ * /api/followup:
+ *   post:
+ *     summary: Follow-up API for minor code fixes and queries
+ *     description: |
+ *       Receives test files, reads them, and uses LLaMA (via Groq) to fix issues or make minor changes.
+ *       This endpoint is useful for quick iterations on already generated code.
+ *     tags:
+ *       - Code Modification
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: ["query", "files"]
+ *             properties:
+ *               query:
+ *                 type: string
+ *                 description: The fix or change requested
+ *                 example: "Fix the collision detection in gameObjects.js - the player goes through walls"
+ *               files:
+ *                 type: array
+ *                 description: Array of files to analyze and modify
+ *                 items:
+ *                   type: object
+ *                   required: ["name", "content"]
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                       description: File name
+ *                       example: "gameObjects.js"
+ *                     content:
+ *                       type: string
+ *                       description: File content
+ *               projectId:
+ *                 type: string
+ *                 description: Optional project ID for context
+ *                 example: "uuid-1234-5678"
+ *           examples:
+ *             fix_collision:
+ *               summary: Fix collision detection
+ *               value:
+ *                 query: "Fix the collision detection - player passes through walls"
+ *                 files:
+ *                   - name: "gameObjects.js"
+ *                     content: "class Player extends GameObject { ... }"
+ *                   - name: "config.js"
+ *                     content: "const GameConfig = { ... }"
+ *             add_feature:
+ *               summary: Add new feature
+ *               value:
+ *                 query: "Add a pause functionality when pressing 'P' key"
+ *                 files:
+ *                   - name: "inputManager.js"
+ *                     content: "class InputManager { ... }"
+ *                   - name: "gameManager.js"
+ *                     content: "class GameManager { ... }"
+ *     responses:
+ *       200:
+ *         description: Successfully processed the follow-up request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 query:
+ *                   type: string
+ *                   description: The original query
+ *                 analysis:
+ *                   type: string
+ *                   description: LLaMA's analysis of the issue
+ *                 modifiedFiles:
+ *                   type: array
+ *                   description: Array of modified files
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       name:
+ *                         type: string
+ *                         example: "gameObjects.js"
+ *                       content:
+ *                         type: string
+ *                         description: Updated file content
+ *                       changes:
+ *                         type: string
+ *                         description: Summary of changes made
+ *                 suggestions:
+ *                   type: array
+ *                   description: Additional suggestions from LLaMA
+ *                   items:
+ *                     type: string
+ *                 chatId:
+ *                   type: integer
+ *                   description: Chat session ID for tracking
+ *       400:
+ *         description: Invalid request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Query and files are required"
+ *       500:
+ *         description: Internal server error
+ */
+app.post("/api/followup", async (req, res) => {
+  const chatId = chatCounter++
+
+  try {
+    const { query, files, projectId } = req.body
+
+    // Validation
+    if (!query || !query.trim()) {
+      return res.status(400).json({
+        error: "Query is required",
+        chatId,
+      })
+    }
+
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({
+        error: "Files array is required and must not be empty",
+        chatId,
+      })
+    }
+
+    // Validate file structure
+    for (const file of files) {
+      if (!file.name || !file.content) {
+        return res.status(400).json({
+          error: "Each file must have 'name' and 'content' properties",
+          chatId,
+        })
+      }
+    }
+
+    console.log(chalk.blue(`Processing follow-up request for Chat ${chatId}`))
+    console.log(chalk.blue(`Query: ${query}`))
+    console.log(chalk.blue(`Files provided: ${files.map(f => f.name).join(", ")}`))
+
+    // Prepare the context for LLaMA
+    const fileContext = files.map(file => {
+      return `// === ${file.name} ===\n${file.content}`
+    }).join("\n\n")
+
+    // Create the prompt for LLaMA
+    const followUpPrompt = `You are an expert game developer assistant. A user has already generated a web game and needs help with the following:
+
+USER QUERY: ${query}
+
+PROJECT ID: ${projectId || 'Not specified'}
+
+CURRENT FILES:
+${fileContext}
+
+Please:
+1. Analyze the issue or requested change
+2. Provide the complete updated code for any files that need modification
+3. Explain what changes were made and why
+4. Suggest any additional improvements if relevant
+
+IMPORTANT: 
+- Return the complete file content, not just snippets
+- Maintain the same code structure and style
+- Ensure all changes are compatible with the existing code
+- For each modified file, use the format: // === filename.js === followed by the complete code
+
+Provide your analysis first, then the updated files.`
+
+    // Call LLaMA via Groq for the follow-up
+    const groqResponse = await llmProvider.groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert game developer. Help fix issues and make improvements to web games. Always provide complete file contents when making changes."
+        },
+        {
+          role: "user",
+          content: followUpPrompt
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 8000,
+    })
+
+    const llmResponse = groqResponse.choices[0].message.content
+
+    // Parse the response to extract analysis and modified files
+    const analysisMatch = llmResponse.match(/^([\s\S]*?)(?=\/\/ ===|$)/);
+    const analysis = analysisMatch ? analysisMatch[1].trim() : "No analysis provided";
+
+    // Extract modified files
+    const modifiedFiles = []
+    const fileSeparatorPattern = /\/\/ === ([\w.-]+) ===([\s\S]*?)(?=\/\/ === |$)/g
+    let match
+
+    while ((match = fileSeparatorPattern.exec(llmResponse)) !== null) {
+      const fileName = match[1].trim()
+      let fileContent = match[2].trim()
+      
+      // Clean up the code
+      fileContent = cleanupGeneratedCode(fileContent, fileName)
+      
+      // Find the original file to compare
+      const originalFile = files.find(f => f.name === fileName)
+      const changes = originalFile 
+        ? "File modified based on the requested changes" 
+        : "New file created"
+
+      modifiedFiles.push({
+        name: fileName,
+        content: fileContent,
+        changes: changes
+      })
+    }
+
+    // Extract suggestions from the analysis
+    const suggestions = []
+    const suggestionMatches = analysis.match(/(?:suggest|recommend|consider|additionally)[\s\S]{0,200}/gi)
+    if (suggestionMatches) {
+      suggestions.push(...suggestionMatches.map(s => s.trim()))
+    }
+
+    // If projectId provided, optionally save the modified files
+    if (projectId && modifiedFiles.length > 0) {
+      const projectPath = path.join(PROJECTS_DIR, projectId)
+      if (await fs.pathExists(projectPath)) {
+        for (const file of modifiedFiles) {
+          const filePath = path.join(projectPath, file.name)
+          await fs.writeFile(filePath, file.content)
+          console.log(chalk.green(`✅ Updated ${file.name} in project ${projectId}`))
+        }
+      }
+    }
+
+    // Send response
+    res.json({
+      success: true,
+      query: query,
+      analysis: analysis,
+      modifiedFiles: modifiedFiles,
+      suggestions: suggestions.length > 0 ? suggestions : ["No additional suggestions"],
+      chatId: chatId,
+      filesAnalyzed: files.length,
+      filesModified: modifiedFiles.length,
+      projectId: projectId || null
+    })
+
+    console.log(chalk.green(`Follow-up request completed for Chat ${chatId}`))
+    console.log(chalk.green(`Modified ${modifiedFiles.length} files`))
+
+  } catch (error) {
+    console.error(chalk.red(`Error in follow-up Chat ${chatId}:`, error.message))
+    res.status(500).json({
+      error: "Failed to process follow-up request",
+      details: error.message,
+      chatId,
+    })
+  }
+})
+
+// ============================================================================
+// SERVER STARTUP
+// ============================================================================
 
 function checkEnvironment() {
-    const required = ['GROQ_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'];
-    const optional = ['LANGSMITH_API_KEY'];
+  const required = ["GROQ_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]
+  const missing = required.filter((key) => !process.env[key])
 
-    const missing = required.filter(key => !process.env[key]);
-    const missingOptional = optional.filter(key => !process.env[key]);
-
-    if (missing.length > 0) {
-        console.error(chalk.red('Missing required environment variables:'));
-        missing.forEach(key => console.error(chalk.red(`   - ${key}`)));
-        console.error(chalk.red('Please set these environment variables and try again.'));
-        process.exit(1);
-    }
-
-    if (missingOptional.length > 0) {
-        console.log(chalk.yellow('Missing optional environment variables:'));
-        missingOptional.forEach(key => console.log(chalk.yellow(`   - ${key} (LangSmith tracing will be disabled)`)));
-    }
+  if (missing.length > 0) {
+    console.error(chalk.red("Missing required environment variables:"))
+    missing.forEach((key) => console.error(chalk.red(`   - ${key}`)))
+    process.exit(1)
+  }
 }
 
-process.on('SIGINT', () => {
-    console.log(chalk.yellow('Shutting down Web Game AI Generator...'));
-    console.log(chalk.green('Web Game AI Generator stopped. Goodbye!'));
-    process.exit(0);
-});
+process.on("SIGINT", () => {
+  console.log(chalk.yellow("Shutting down Web Game AI Generator Streaming API..."))
+  process.exit(0)
+})
 
-checkEnvironment();
+checkEnvironment()
 app.listen(PORT, () => {
-    console.log(chalk.green(`Web Game AI Generator with Groq Checker Chain + Live Preview running on http://localhost:${PORT}`));
-    console.log(chalk.blue(`Web Interface: http://localhost:${PORT}`));
-    console.log(chalk.blue(`API Endpoint: POST http://localhost:${PORT}/generate`));
-    console.log(chalk.blue(`Live Preview: GET http://localhost:${PORT}/preview/:projectId`));
-    console.log(chalk.blue(`Health Check: http://localhost:${PORT}/health`));
-    console.log(chalk.yellow(`Projects Directory: ${PROJECTS_DIR}`));
-    console.log(chalk.yellow(`Chat History: ${CHAT_HISTORY_DIR}`));
-    console.log(chalk.magenta(`Framework: HTML5 Canvas + Modern JavaScript`));
-    console.log(chalk.magenta(`File Structure: Comprehensive 10+ file modular architecture`));
-    console.log(chalk.magenta(`Quality Level: Production-Ready Web Games with Complete Asset Structure`));
-    console.log(chalk.green(`LangSmith Integration: ${ENABLE_LANGSMITH_TRACING ? 'Enabled' : 'Disabled'}`));
-    console.log(chalk.green(`LangSmith Project: ${process.env.LANGSMITH_PROJECT || 'ClawCode-Unity-Generator'}`));
-    console.log(chalk.green(`Live Preview: ${ENABLE_LIVE_PREVIEW ? 'Enabled' : 'Disabled'}`));
-    console.log(chalk.cyan(`AI Generation Chain:`));
-    console.log(chalk.cyan(`   Step 1: Groq (LLaMA 3.3 70B) - Game explanation and technical architecture`));
-    console.log(chalk.cyan(`   Step 2: Mistral 7B - Implementation plan and modular class structure`));
-    console.log(chalk.cyan(`   Step 3: Groq (LLaMA 3.3 70B) - Implementation validation and feedback`));
-    console.log(chalk.cyan(`   Step 4: Anthropic (Claude 3 Haiku) - Final comprehensive web game code`));
-    console.log(chalk.cyan(`Feature Flags:`));
-    console.log(chalk.cyan(`   New AI Chain: ${ENABLE_NEW_CHAIN ? 'Enabled' : 'Disabled'}`));
-    console.log(chalk.cyan(`   LangSmith Tracing: ${ENABLE_LANGSMITH_TRACING ? 'Enabled' : 'Disabled'}`));
-    console.log(chalk.cyan(`   Live Preview: ${ENABLE_LIVE_PREVIEW ? 'Enabled' : 'Disabled'}`));
-});
+  console.log(chalk.green(`🚀 Web Game AI Generator Streaming API running on http://localhost:${PORT}`))
+  console.log(chalk.blue(`📚 Swagger Documentation: http://localhost:${PORT}/api-docs`))
+  console.log(chalk.blue(`🏥 Health Check: http://localhost:${PORT}/api/health`))
+  console.log(chalk.cyan(`📡 Streaming Endpoints:`))
+  console.log(chalk.cyan(`   POST /api/generate/simple - 2-Step Chain (Groq → Qwen3)`))
+  console.log(chalk.cyan(`   POST /api/generate/full - 4-Step Chain (Groq → Qwen3 → Anthropic → Qwen3)`))
+  console.log(chalk.magenta(`🎯 Features:`))
+  console.log(chalk.magenta(`   ✅ Server-Sent Events streaming`))
+  console.log(chalk.magenta(`   ✅ Real-time progress updates`))
+  console.log(chalk.magenta(`   ✅ Individual file streaming`))
+  console.log(chalk.magenta(`   ✅ Clean code generation (no comments)`))
+  console.log(chalk.magenta(`   ✅ Complete npm project setup`))
+  console.log(chalk.magenta(`   ✅ Auto npm install and server launch`))
+  console.log(chalk.magenta(`   ✅ Live game URL in response`))
+})
