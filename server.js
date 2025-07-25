@@ -359,24 +359,37 @@ async function setupAndRunProject(projectPath) {
         // Check if server started successfully
         let serverStarted = false
         
-        serverProcess.stdout.on('data', (data) => {
-          const output = data.toString()
-          console.log(chalk.gray(`Server output: ${output}`))
-          
-          // Check for server start messages
-          if (output.includes('localhost') || output.includes('Listening') || output.includes(port.toString())) {
-            if (!serverStarted) {
-              serverStarted = true
-              const serverUrl = `http://localhost:${port}`
-              console.log(chalk.green(`✅ Server running at ${serverUrl}`))
-              resolve({
-                url: serverUrl,
-                port: port,
-                process: serverProcess
-              })
-            }
+         serverProcess.stdout.on('data', (data) => {
+          const output = data.toString();
+          console.log(chalk.gray(`Server output: ${output}`));
+        
+          // Regex to extract port from Serve's standard message
+          const match = output.match(/http:\/\/localhost:(\d+)/);
+          if (match && !serverStarted) {
+            serverStarted = true;
+            const realPort = match[1];
+            const serverUrl = `http://localhost:${realPort}`;
+            console.log(chalk.green(`✅ Server running at ${serverUrl}`));
+            resolve({
+              url: serverUrl,
+              port: parseInt(realPort),
+              process: serverProcess
+            });
+          } else if (!serverStarted && (output.includes('localhost') || output.includes('Listening'))) {
+            // Fallback: if regex doesn't work but message looks server-like
+            setTimeout(() => {
+              if (!serverStarted) {
+                const serverUrl = `http://localhost:${port}`;
+                console.log(chalk.yellow(`⚠️  Fall back to assumed URL: ${serverUrl}`));
+                resolve({
+                  url: serverUrl,
+                  port: port,
+                  process: serverProcess
+                });
+              }
+            }, 1000);
           }
-        })
+        });
 
         serverProcess.stderr.on('data', (data) => {
           console.log(chalk.gray(`Server stderr: ${data.toString()}`))
