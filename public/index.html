@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Game AI Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .test-section {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+
+        .test-section h3 {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: #667eea;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            min-height: 100px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .test-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: background 0.3s ease;
+            margin-right: 10px;
+        }
+
+        .test-btn:hover {
+            background: #5a6fd8;
+        }
+
+        .test-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .output-area {
+            margin-top: 20px;
+            background: #f1f3f4;
+            border-radius: 8px;
+            padding: 15px;
+            min-height: 200px;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .event {
+            margin: 5px 0;
+            padding: 8px;
+            border-left: 3px solid #4CAF50;
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .error {
+            border-left-color: #f44336;
+            background: rgba(244, 67, 54, 0.1);
+        }
+
+        .file {
+            border-left-color: #2196F3;
+            background: rgba(33, 150, 243, 0.1);
+        }
+
+        .complete {
+            border-left-color: #ff8c00;
+            background: rgba(255, 140, 0, 0.1);
+        }
+
+        .progress {
+            border-left-color: #9c27b0;
+            background: rgba(156, 39, 176, 0.1);
+        }
+
+        .game-url {
+            color: #4CAF50;
+            font-weight: bold;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+
+        .clear-btn {
+            background: #f44336;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .clear-btn:hover {
+            background: #d32f2f;
+        }
+
+        .links {
+            margin-top: 30px;
+            text-align: center;
+        }
+
+        .links a {
+            display: inline-block;
+            margin: 10px;
+            padding: 15px 25px;
+            background: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            transition: background 0.3s ease;
+        }
+
+        .links a:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎮 Web Game AI Generator</h1>
+            <p>Generate HTML5 Canvas games using AI chains</p>
+        </div>
+
+        <div class="content">
+            <!-- Simple Chain Test -->
+            <div class="test-section">
+                <h3>⚡ Simple Chain (2 Steps)</h3>
+                <p>Groq → Qwen3: Fast generation with clean code output</p>
+                
+                <div class="form-group">
+                    <label for="simple-prompt">Game Description:</label>
+                    <textarea id="simple-prompt" placeholder="Create a Snake game with HTML5 Canvas, smooth movement, food collection, score system, collision detection, and responsive mobile controls...">Create a Snake game with HTML5 Canvas, smooth movement, food collection, score system, collision detection, and responsive mobile controls</textarea>
+                </div>
+
+                <button class="test-btn" onclick="testSimpleChain()" id="simple-btn">🚀 Generate Simple</button>
+                <button class="clear-btn" onclick="clearOutput('simple-output')">🗑️ Clear</button>
+
+                <div class="output-area" id="simple-output">
+                    <div class="event">Ready to generate games with Simple Chain...</div>
+                </div>
+            </div>
+
+            <!-- Full Chain Test -->
+            <div class="test-section">
+                <h3>🔧 Full Chain (4 Steps)</h3>
+                <p>Groq → Qwen3 → Anthropic → Qwen3: Complete generation with validation</p>
+                
+                <div class="form-group">
+                    <label for="full-prompt">Game Description:</label>
+                    <textarea id="full-prompt" placeholder="Create a Tetris game with HTML5 Canvas, piece rotation, line clearing, increasing difficulty, and responsive design...">Create a Tetris game with HTML5 Canvas, piece rotation, line clearing, increasing difficulty, and responsive design</textarea>
+                </div>
+
+                <button class="test-btn" onclick="testFullChain()" id="full-btn">🚀 Generate Full</button>
+                <button class="clear-btn" onclick="clearOutput('full-output')">🗑️ Clear</button>
+
+                <div class="output-area" id="full-output">
+                    <div class="event">Ready to generate games with Full Chain...</div>
+                </div>
+            </div>
+
+            <div class="links">
+                <a href="/test-apis.html">🧪 Test APIs</a>
+                <a href="/api-docs" target="_blank">📚 API Docs</a>
+                <a href="/api/health" target="_blank">🏥 Health Check</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let simpleEventSource = null;
+        let fullEventSource = null;
+
+        function clearOutput(outputId) {
+            document.getElementById(outputId).innerHTML = '<div class="event">Output cleared...</div>';
+        }
+
+        async function testSimpleChain() {
+            const btn = document.getElementById('simple-btn');
+            const output = document.getElementById('simple-output');
+            const prompt = document.getElementById('simple-prompt').value;
+
+            if (!prompt.trim()) {
+                alert('Please enter a game description');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '🔄 Generating...';
+            output.innerHTML = '<div class="event progress">🚀 Starting Simple Chain generation...</div>';
+
+            try {
+                const response = await fetch('/api/generate/simple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ prompt })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            const eventType = line.substring(7);
+                        } else if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+                                handleStreamEvent('simple-output', eventType || 'message', data);
+                            } catch (e) {
+                                console.warn('Failed to parse event data:', line);
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                output.innerHTML += `<div class="event error">❌ Error: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🚀 Generate Simple';
+            }
+        }
+
+        async function testFullChain() {
+            const btn = document.getElementById('full-btn');
+            const output = document.getElementById('full-output');
+            const prompt = document.getElementById('full-prompt').value;
+
+            if (!prompt.trim()) {
+                alert('Please enter a game description');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '🔄 Generating...';
+            output.innerHTML = '<div class="event progress">🚀 Starting Full Chain generation...</div>';
+
+            try {
+                const response = await fetch('/api/generate/full', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ prompt })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            const eventType = line.substring(7);
+                        } else if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+                                handleStreamEvent('full-output', eventType || 'message', data);
+                            } catch (e) {
+                                console.warn('Failed to parse event data:', line);
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                output.innerHTML += `<div class="event error">❌ Error: ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🚀 Generate Full';
+            }
+        }
+
+        function handleStreamEvent(outputId, eventType, data) {
+            const output = document.getElementById(outputId);
+            let eventHtml = '';
+
+            switch (eventType) {
+                case 'progress':
+                    eventHtml = `<div class="event progress">📊 Progress: Step ${data.step}/${data.totalSteps} - ${data.stepName} (${data.progress}%) - ${data.message}</div>`;
+                    break;
+
+                case 'step_complete':
+                    eventHtml = `<div class="event">✅ Step ${data.step} Complete: ${data.stepName} - ${data.output}</div>`;
+                    break;
+
+                case 'file_generated':
+                    eventHtml = `<div class="event file">📄 File: ${data.fileName} (${data.fileType}, ${data.size} chars)</div>`;
+                    break;
+
+                case 'complete':
+                    eventHtml = `<div class="event complete">🎉 Generation Complete! Chat ID: ${data.chatId}, Files: ${data.totalFiles}, Chain: ${data.chainUsed}</div>`;
+                    if (data.setupInstructions && data.setupInstructions.liveUrl) {
+                        eventHtml += `<div class="event complete">🎮 Game is now running at: <a href="${data.setupInstructions.liveUrl}" target="_blank" class="game-url">${data.setupInstructions.liveUrl}</a></div>`;
+                    }
+                    eventHtml += `<div class="event complete">🛠️ Setup: ${data.setupInstructions.npmInstall} → ${data.setupInstructions.startCommand}</div>`;
+                    break;
+
+                case 'error':
+                    eventHtml = `<div class="event error">❌ Error: ${data.error} - ${data.details || ''}</div>`;
+                    break;
+
+                default:
+                    eventHtml = `<div class="event">📨 ${eventType}: ${JSON.stringify(data)}</div>`;
+            }
+
+            output.innerHTML += eventHtml;
+            output.scrollTop = output.scrollHeight;
+        }
+    </script>
+</body>
+</html> 

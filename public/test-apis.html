@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Test Interface - Web Game AI Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .test-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .test-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 25px;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .test-card:hover {
+            border-color: #667eea;
+            transform: translateY(-2px);
+        }
+
+        .test-card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: #667eea;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .input-group input, .input-group textarea, .input-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        .input-group input:focus, .input-group textarea:focus, .input-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .input-group textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .test-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: background 0.3s ease;
+            width: 100%;
+        }
+
+        .test-btn:hover {
+            background: #5a6fd8;
+        }
+
+        .test-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .response-area {
+            margin-top: 20px;
+            background: #f1f3f4;
+            border-radius: 8px;
+            padding: 15px;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .response-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .response-time {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .response-content {
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+
+        .success {
+            background: #e8f5e8;
+            color: #2e7d32;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+
+        .metrics-panel {
+            background: #e3f2fd;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 30px;
+        }
+
+        .metrics-panel h4 {
+            color: #1976d2;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .metric-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #1976d2;
+        }
+
+        .metric-label {
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .clear-btn {
+            background: #f44336;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            margin-left: 10px;
+        }
+
+        .clear-btn:hover {
+            background: #d32f2f;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧪 API Test Interface</h1>
+            <p>Test both Ollama and OpenRouter APIs with response time tracking</p>
+        </div>
+
+        <div class="content">
+            <div class="test-grid">
+                <!-- Ollama Test Card -->
+                <div class="test-card">
+                    <h3>🤖 Ollama API Test</h3>
+                    
+                    <div class="input-group">
+                        <label for="ollama-model">Model:</label>
+                        <select id="ollama-model">
+                            <option value="deepseek-coder:6.7b">deepseek-coder:6.7b</option>
+                            <option value="codellama:7b">codellama:7b</option>
+                            <option value="deepseek-coder:6.7b">deepseek-coder:6.7b</option>
+                            <option value="wizardcoder:7b">wizardcoder:7b</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="ollama-prompt">Prompt:</label>
+                        <textarea id="ollama-prompt" placeholder="Enter your test prompt here...">Write a simple JavaScript function to calculate the factorial of a number</textarea>
+                    </div>
+
+                    <button class="test-btn" onclick="testOllama()" id="ollama-btn">🚀 Test Ollama</button>
+
+                    <div class="response-area" id="ollama-response">
+                        <div class="loading">Response will appear here...</div>
+                    </div>
+                </div>
+
+                <!-- OpenRouter Test Card -->
+                <div class="test-card">
+                    <h3>🌐 OpenRouter API Test</h3>
+                    
+                    <div class="input-group">
+                        <label for="openrouter-model">Model:</label>
+                        <select id="openrouter-model">
+                            <option value="qwen/qwen3-14b:free">qwen/qwen3-14b:free</option>
+                            <option value="qwen/qwen3-coder:free">qwen/qwen3-coder:free</option>
+                            <option value="meta-llama/llama-3.1-8b-instruct:free">meta-llama/llama-3.1-8b-instruct:free</option>
+                            <option value="mistralai/mistral-7b-instruct:free">mistralai/mistral-7b-instruct:free</option>
+                            <option value="google/gemini-2.0-flash-exp:free">google/gemini-2.0-flash-exp:free</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="openrouter-prompt">Prompt:</label>
+                        <textarea id="openrouter-prompt" placeholder="Enter your test prompt here...">Write a simple JavaScript function to calculate the factorial of a number</textarea>
+                    </div>
+
+                    <button class="test-btn" onclick="testOpenRouter()" id="openrouter-btn">🚀 Test OpenRouter</button>
+
+                    <div class="response-area" id="openrouter-response">
+                        <div class="loading">Response will appear here...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Metrics Panel -->
+            <div class="metrics-panel">
+                <h4>📊 Response Time Metrics</h4>
+                <div class="metrics-grid" id="metrics-grid">
+                    <div class="metric-item">
+                        <div class="metric-value" id="ollama-avg-time">-</div>
+                        <div class="metric-label">Ollama Avg Time</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="openrouter-avg-time">-</div>
+                        <div class="metric-label">OpenRouter Avg Time</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="ollama-tests">0</div>
+                        <div class="metric-label">Ollama Tests</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="openrouter-tests">0</div>
+                        <div class="metric-label">OpenRouter Tests</div>
+                    </div>
+                </div>
+                <button class="clear-btn" onclick="clearMetrics()">🗑️ Clear Metrics</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let metrics = {
+            ollama: { times: [], count: 0 },
+            openrouter: { times: [], count: 0 }
+        };
+
+        function updateMetrics() {
+            const ollamaAvg = metrics.ollama.times.length > 0 
+                ? Math.round(metrics.ollama.times.reduce((a, b) => a + b, 0) / metrics.ollama.times.length)
+                : 0;
+            const openrouterAvg = metrics.openrouter.times.length > 0 
+                ? Math.round(metrics.openrouter.times.reduce((a, b) => a + b, 0) / metrics.openrouter.times.length)
+                : 0;
+
+            document.getElementById('ollama-avg-time').textContent = ollamaAvg > 0 ? `${ollamaAvg}ms` : '-';
+            document.getElementById('openrouter-avg-time').textContent = openrouterAvg > 0 ? `${openrouterAvg}ms` : '-';
+            document.getElementById('ollama-tests').textContent = metrics.ollama.count;
+            document.getElementById('openrouter-tests').textContent = metrics.openrouter.count;
+        }
+
+        function clearMetrics() {
+            metrics = {
+                ollama: { times: [], count: 0 },
+                openrouter: { times: [], count: 0 }
+            };
+            updateMetrics();
+        }
+
+        async function testOllama() {
+            const btn = document.getElementById('ollama-btn');
+            const responseArea = document.getElementById('ollama-response');
+            const model = document.getElementById('ollama-model').value;
+            const prompt = document.getElementById('ollama-prompt').value;
+
+            if (!prompt.trim()) {
+                alert('Please enter a prompt');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '⏳ Testing...';
+            responseArea.innerHTML = '<div class="loading">Testing Ollama API...</div>';
+
+            const startTime = Date.now();
+
+            try {
+                const response = await fetch('/api/test/ollama', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        prompt: prompt
+                    })
+                });
+
+                const endTime = Date.now();
+                const responseTime = endTime - startTime;
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                // Update metrics
+                metrics.ollama.times.push(responseTime);
+                metrics.ollama.count++;
+                updateMetrics();
+
+                // Console log for CLI monitoring
+                console.log(`🤖 OLLAMA RESPONSE TIME: ${responseTime}ms`);
+                console.log(`   Model: ${model}`);
+                console.log(`   Prompt: ${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}`);
+                console.log(`   Response Length: ${data.response.length} chars`);
+                console.log(`   Speed: ${Math.round(data.response.length / (responseTime / 1000))} chars/sec`);
+
+                responseArea.innerHTML = `
+                    <div class="response-header">
+                        <strong>✅ Ollama Response</strong>
+                        <span class="response-time">${responseTime}ms</span>
+                    </div>
+                    <div class="response-content">${data.response}</div>
+                `;
+
+            } catch (error) {
+                console.error('❌ Ollama API Error:', error);
+                responseArea.innerHTML = `
+                    <div class="error">
+                        ❌ Error: ${error.message}
+                    </div>
+                `;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🚀 Test Ollama';
+            }
+        }
+
+        async function testOpenRouter() {
+            const btn = document.getElementById('openrouter-btn');
+            const responseArea = document.getElementById('openrouter-response');
+            const model = document.getElementById('openrouter-model').value;
+            const prompt = document.getElementById('openrouter-prompt').value;
+
+            if (!prompt.trim()) {
+                alert('Please enter a prompt');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '⏳ Testing...';
+            responseArea.innerHTML = '<div class="loading">Testing OpenRouter API...</div>';
+
+            const startTime = Date.now();
+
+            try {
+                const response = await fetch('/api/test/openrouter', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        prompt: prompt
+                    })
+                });
+
+                const endTime = Date.now();
+                const responseTime = endTime - startTime;
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                // Update metrics
+                metrics.openrouter.times.push(responseTime);
+                metrics.openrouter.count++;
+                updateMetrics();
+
+                // Console log for CLI monitoring
+                console.log(`🌐 OPENROUTER RESPONSE TIME: ${responseTime}ms`);
+                console.log(`   Model: ${model}`);
+                console.log(`   Prompt: ${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}`);
+                console.log(`   Response Length: ${data.response.length} chars`);
+                console.log(`   Speed: ${Math.round(data.response.length / (responseTime / 1000))} chars/sec`);
+
+                responseArea.innerHTML = `
+                    <div class="response-header">
+                        <strong>✅ OpenRouter Response</strong>
+                        <span class="response-time">${responseTime}ms</span>
+                    </div>
+                    <div class="response-content">${data.response}</div>
+                `;
+
+            } catch (error) {
+                console.error('❌ OpenRouter API Error:', error);
+                responseArea.innerHTML = `
+                    <div class="error">
+                        ❌ Error: ${error.message}
+                    </div>
+                `;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🚀 Test OpenRouter';
+            }
+        }
+
+        // Initialize metrics display
+        updateMetrics();
+    </script>
+</body>
+</html> 

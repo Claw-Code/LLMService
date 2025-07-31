@@ -30,6 +30,74 @@ const CHAT_HISTORY_DIR = "chat-history"
 await fs.ensureDir(PROJECTS_DIR)
 await fs.ensureDir(CHAT_HISTORY_DIR)
 
+// Function to display CLI metrics
+function displayCLIMetrics(chatId, metrics, prompt) {
+  console.log(chalk.blue('\n' + '='.repeat(60)))
+  console.log(chalk.blue(`📊 CHAT #${chatId} METRICS`))
+  console.log(chalk.blue('='.repeat(60)))
+  
+  // Basic info
+  console.log(chalk.cyan(`🎯 Prompt: ${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}`))
+  console.log(chalk.cyan(`🤖 Provider: ${metrics.provider.toUpperCase()}`))
+  console.log(chalk.cyan(`🧠 Model: ${metrics.model}`))
+  
+  // Timing metrics
+  console.log(chalk.yellow('\n⏱️  TIMING METRICS:'))
+  console.log(chalk.yellow(`   Total Time: ${metrics.totalTime}ms`))
+  console.log(chalk.yellow(`   Avg Response: ${Math.round(metrics.averageResponseTime)}ms`))
+  
+  // Step breakdown
+  console.log(chalk.green('\n📈 STEP BREAKDOWN:'))
+  Object.entries(metrics.steps).forEach(([stepName, step]) => {
+    const duration = step.duration
+    const chars = step.responseLength
+    const speed = Math.round(chars / (duration / 1000)) // chars per second
+    
+    console.log(chalk.green(`   ${stepName.toUpperCase()}:`))
+    console.log(chalk.white(`     Duration: ${duration}ms`))
+    console.log(chalk.white(`     Response: ${chars.toLocaleString()} chars`))
+    console.log(chalk.white(`     Speed: ${speed} chars/sec`))
+  })
+  
+  // Performance indicators
+  console.log(chalk.magenta('\n🚀 PERFORMANCE:'))
+  const totalChars = Object.values(metrics.steps).reduce((sum, step) => sum + step.responseLength, 0)
+  const overallSpeed = Math.round(totalChars / (metrics.totalTime / 1000))
+  
+  console.log(chalk.magenta(`   Total Generated: ${totalChars.toLocaleString()} chars`))
+  console.log(chalk.magenta(`   Overall Speed: ${overallSpeed} chars/sec`))
+  
+  // Performance rating
+  let rating = '🟢 Excellent'
+  if (metrics.totalTime > 30000) rating = '🔴 Slow'
+  else if (metrics.totalTime > 15000) rating = '🟡 Moderate'
+  
+  console.log(chalk.magenta(`   Performance: ${rating}`))
+  
+  console.log(chalk.blue('='.repeat(60) + '\n'))
+}
+
+// Function to save chat history with metrics
+async function saveChatHistory(chatId, prompt, responses, metrics) {
+  try {
+    const chatFile = path.join(CHAT_HISTORY_DIR, `chat-${chatId}.json`)
+    const chatData = {
+      chatId,
+      timestamp: new Date().toISOString(),
+      prompt,
+      responses,
+      metrics,
+      provider: process.env.USE_OLLAMA === "true" ? "ollama" : "openrouter",
+      model: process.env.USE_OLLAMA === "true" ? process.env.OLLAMA_MODEL : process.env.OPENROUTER_MODEL
+    }
+    
+    await fs.writeJson(chatFile, chatData, { spaces: 2 })
+    console.log(chalk.green(`✅ Chat history saved: chat-${chatId}.json`))
+  } catch (error) {
+    console.log(chalk.red(`❌ Failed to save chat history: ${error.message}`))
+  }
+}
+
 let chatCounter = 1
 const conversationContexts = new Map()
 
@@ -1102,6 +1170,17 @@ app.post("/api/generate/simple", async (req, res) => {
     console.log(chalk.blue(`Starting SIMPLE chain generation for Chat ${chatId}`))
     console.log(chalk.blue(`Game Request: ${prompt}`))
 
+    // Initialize metrics tracking
+    const startTime = Date.now()
+    const metrics = {
+      totalStartTime: startTime,
+      steps: {},
+      totalTime: 0,
+      averageResponseTime: 0,
+      provider: process.env.USE_OLLAMA === "true" ? "ollama" : "openrouter",
+      model: process.env.USE_OLLAMA === "true" ? process.env.OLLAMA_MODEL : process.env.OPENROUTER_MODEL
+    }
+
     sendEvent("progress", {
       step: 0,
       totalSteps: 2,
@@ -1119,7 +1198,15 @@ app.post("/api/generate/simple", async (req, res) => {
       message: "Getting comprehensive game explanation from Groq...",
     })
 
+    const groqStartTime = Date.now()
     const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId)
+    const groqEndTime = Date.now()
+    metrics.steps.groq = {
+      startTime: groqStartTime,
+      endTime: groqEndTime,
+      duration: groqEndTime - groqStartTime,
+      responseLength: groqExplanation.length
+    }
 
     sendEvent("progress", {
       step: 1,
@@ -1138,7 +1225,33 @@ app.post("/api/generate/simple", async (req, res) => {
       message: "Generating clean, production-ready code with Qwen3...",
     })
 
+    const qwenStartTime = Date.now()
     const qwenFinalCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId)
+    const qwenEndTime = Date.now()
+    metrics.steps.qwen = {
+      startTime: qwenStartTime,
+      endTime: qwenEndTime,
+      duration: qwenEndTime - qwenStartTime,
+      responseLength: qwenFinalCode.length
+    }
+
+    // Calculate total metrics
+    const totalEndTime = Date.now()
+    metrics.totalTime = totalEndTime - startTime
+    metrics.averageResponseTime = Object.values(metrics.steps).reduce((sum, step) => sum + step.duration, 0) / Object.keys(metrics.steps).length
+
+    // Display CLI metrics
+    displayCLIMetrics(chatId, metrics, prompt)
+
+    // Save chat responses with metrics
+    const responses = {
+      groqExplanation,
+      qwenFinalCode,
+      anthropicFeedback: null,
+      qwenFinalCodeWithFixes: null
+    }
+    
+    await saveChatHistory(chatId, prompt, responses, metrics)
 
     sendEvent("progress", {
       step: 2,
@@ -1226,6 +1339,126 @@ app.post("/api/generate/simple", async (req, res) => {
  
   res.end()
   
+})
+
+// API endpoint to get chat history with metrics
+app.get("/api/chat-history/:chatId", async (req, res) => {
+  try {
+    const { chatId } = req.params
+    const chatFile = path.join(CHAT_HISTORY_DIR, `chat-${chatId}.json`)
+    
+    if (await fs.pathExists(chatFile)) {
+      const chatData = await fs.readJson(chatFile)
+      res.json(chatData)
+    } else {
+      res.status(404).json({ error: "Chat history not found" })
+    }
+  } catch (error) {
+    console.log(chalk.red(`❌ Error retrieving chat history: ${error.message}`))
+    res.status(500).json({ error: "Failed to retrieve chat history" })
+  }
+})
+
+// API endpoint to get all chat history
+app.get("/api/chat-history", async (req, res) => {
+  try {
+    const chatFiles = await fs.readdir(CHAT_HISTORY_DIR)
+    const chatHistory = []
+    
+    for (const file of chatFiles) {
+      if (file.endsWith('.json')) {
+        const chatData = await fs.readJson(path.join(CHAT_HISTORY_DIR, file))
+        chatHistory.push(chatData)
+      }
+    }
+    
+    // Sort by timestamp (newest first)
+    chatHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    
+    res.json(chatHistory)
+  } catch (error) {
+    console.log(chalk.red(`❌ Error retrieving chat history: ${error.message}`))
+    res.status(500).json({ error: "Failed to retrieve chat history" })
+  }
+})
+
+// API test endpoints
+app.post("/api/test/ollama", async (req, res) => {
+  try {
+    const { model, prompt } = req.body
+    
+    if (!model || !prompt) {
+      return res.status(400).json({ error: "Model and prompt are required" })
+    }
+
+    console.log(chalk.blue(`🧪 Testing Ollama API with model: ${model}`))
+    
+    const startTime = Date.now()
+    const response = await ollama.createChatCompletion([
+      { role: "user", content: prompt }
+    ], {
+      temperature: 0.2,
+      max_tokens: 1000
+    })
+    const endTime = Date.now()
+    const responseTime = endTime - startTime
+
+    console.log(chalk.green(`✅ Ollama test completed in ${responseTime}ms`))
+    console.log(chalk.cyan(`   Model: ${model}`))
+    console.log(chalk.cyan(`   Response Length: ${response.length} chars`))
+    console.log(chalk.cyan(`   Speed: ${Math.round(response.length / (responseTime / 1000))} chars/sec`))
+
+    res.json({ 
+      response, 
+      model, 
+      responseTime,
+      responseLength: response.length,
+      speed: Math.round(response.length / (responseTime / 1000))
+    })
+
+  } catch (error) {
+    console.log(chalk.red(`❌ Ollama test failed: ${error.message}`))
+    res.status(500).json({ error: error.message })
+  }
+})
+
+app.post("/api/test/openrouter", async (req, res) => {
+  try {
+    const { model, prompt } = req.body
+    
+    if (!model || !prompt) {
+      return res.status(400).json({ error: "Model and prompt are required" })
+    }
+
+    console.log(chalk.blue(`🧪 Testing OpenRouter API with model: ${model}`))
+    
+    const startTime = Date.now()
+    const response = await openRouter.createChatCompletion(model, [
+      { role: "user", content: prompt }
+    ], {
+      temperature: 0.2,
+      max_tokens: 1000
+    })
+    const endTime = Date.now()
+    const responseTime = endTime - startTime
+
+    console.log(chalk.green(`✅ OpenRouter test completed in ${responseTime}ms`))
+    console.log(chalk.cyan(`   Model: ${model}`))
+    console.log(chalk.cyan(`   Response Length: ${response.length} chars`))
+    console.log(chalk.cyan(`   Speed: ${Math.round(response.length / (responseTime / 1000))} chars/sec`))
+
+    res.json({ 
+      response, 
+      model, 
+      responseTime,
+      responseLength: response.length,
+      speed: Math.round(response.length / (responseTime / 1000))
+    })
+
+  } catch (error) {
+    console.log(chalk.red(`❌ OpenRouter test failed: ${error.message}`))
+    res.status(500).json({ error: error.message })
+  }
 })
 
 /**
@@ -2109,12 +2342,4 @@ app.listen(PORT, () => {
   console.log(chalk.cyan(`📡 Streaming Endpoints:`))
   console.log(chalk.cyan(`   POST /api/generate/simple - 2-Step Chain (Groq → Qwen3)`))
   console.log(chalk.cyan(`   POST /api/generate/full - 4-Step Chain (Groq → Qwen3 → Anthropic → Qwen3)`))
-  console.log(chalk.magenta(`🎯 Features:`))
-  console.log(chalk.magenta(`   ✅ Server-Sent Events streaming`))
-  console.log(chalk.magenta(`   ✅ Real-time progress updates`))
-  console.log(chalk.magenta(`   ✅ Individual file streaming`))
-  console.log(chalk.magenta(`   ✅ Clean code generation (no comments)`))
-  console.log(chalk.magenta(`   ✅ Complete npm project setup`))
-  console.log(chalk.magenta(`   ✅ Auto npm install and server launch`))
-  console.log(chalk.magenta(`   ✅ Live game URL in response`))
 })

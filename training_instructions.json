@@ -1,0 +1,140 @@
+{
+  "model_config": {
+    "model_name": "Qwen/Qwen-2.5-1M",
+    "model_type": "causal_language_model",
+    "trust_remote_code": true,
+    "load_in_8bit": true,
+    "torch_dtype": "float16"
+  },
+  "lora_config": {
+    "r": 16,
+    "lora_alpha": 32,
+    "target_modules": [
+      "q_proj",
+      "v_proj", 
+      "k_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "lora_dropout": 0.05,
+    "bias": "none",
+    "task_type": "CAUSAL_LM"
+  },
+  "training_config": {
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 4,
+    "gradient_accumulation_steps": 4,
+    "learning_rate": 2e-4,
+    "warmup_steps": 100,
+    "max_length": 512,
+    "fp16": true,
+    "gradient_checkpointing": true,
+    "optimizer": "adamw_torch",
+    "lr_scheduler_type": "cosine",
+    "weight_decay": 0.01,
+    "max_grad_norm": 1.0
+  },
+  "data_config": {
+    "data_format": "instruction_input_output",
+    "max_length": 512,
+    "truncation": true,
+    "padding": true,
+    "return_tensors": "pt"
+  },
+  "output_config": {
+    "output_dir": "./qwen-finetuned",
+    "save_steps": 500,
+    "eval_steps": 500,
+    "logging_steps": 10,
+    "save_strategy": "steps",
+    "evaluation_strategy": "steps",
+    "load_best_model_at_end": true,
+    "metric_for_best_model": "eval_loss",
+    "greater_is_better": false
+  },
+  "monitoring_config": {
+    "report_to": "wandb",
+    "project_name": "qwen-finetuning",
+    "log_model": true
+  },
+  "hardware_requirements": {
+    "minimum_gpu_memory": "8GB",
+    "recommended_gpu_memory": "16GB",
+    "cpu_cores": 4,
+    "ram": "16GB"
+  },
+  "training_instructions": {
+    "setup": [
+      "Install required packages: transformers, peft, accelerate, datasets, torch, bitsandbytes, wandb, evaluate",
+      "Load model with 8-bit quantization for memory efficiency",
+      "Apply LoRA configuration for efficient fine-tuning",
+      "Prepare training data in instruction format"
+    ],
+    "data_preparation": [
+      "Format data as instruction-input-output triplets",
+      "Tokenize with appropriate max_length",
+      "Use DataCollatorForLanguageModeling for batching"
+    ],
+    "training_process": [
+      "Use gradient checkpointing for memory efficiency",
+      "Monitor training with wandb",
+      "Save checkpoints regularly",
+      "Evaluate on validation set"
+    ],
+    "optimization_tips": [
+      "Use mixed precision training (fp16)",
+      "Adjust batch size based on GPU memory",
+      "Use gradient accumulation for larger effective batch sizes",
+      "Monitor loss and learning rate"
+    ],
+    "evaluation": [
+      "Generate sample outputs to verify quality",
+      "Test on diverse prompts",
+      "Compare with baseline model",
+      "Save best model based on validation loss"
+    ]
+  },
+  "example_data_format": {
+    "instruction": "Write a Python function to calculate factorial",
+    "input": "Create a recursive function",
+    "output": "def factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n-1)"
+  },
+  "troubleshooting": {
+    "out_of_memory": [
+      "Reduce batch size",
+      "Increase gradient accumulation steps",
+      "Use gradient checkpointing",
+      "Reduce max_length"
+    ],
+    "slow_training": [
+      "Use mixed precision training",
+      "Optimize data loading",
+      "Use appropriate batch size",
+      "Monitor GPU utilization"
+    ],
+    "poor_quality_outputs": [
+      "Increase training epochs",
+      "Adjust learning rate",
+      "Improve data quality",
+      "Use better prompts"
+    ]
+  },
+  "model_specific_notes": {
+    "qwen_2_5_1m": {
+      "architecture": "Transformer with RMSNorm",
+      "vocabulary_size": 151936,
+      "max_position_embeddings": 32768,
+      "hidden_size": 1024,
+      "intermediate_size": 2816,
+      "num_attention_heads": 16,
+      "num_hidden_layers": 24,
+      "rope_theta": 1000000.0,
+      "use_sliding_window": true,
+      "sliding_window": 4096,
+      "attention_dropout": 0.0,
+      "hidden_dropout": 0.0
+    }
+  }
+} 
