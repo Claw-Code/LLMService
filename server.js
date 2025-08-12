@@ -1403,8 +1403,7 @@ app.post("/api/generate/full", async (req, res) => {
 })
 
 app.post("/api/generate/simple", async (req, res) => {
-  const chatId = chatCounter++
-
+  const chatId = chatCounter++;
   // Set up Server-Sent Events
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -1412,55 +1411,52 @@ app.post("/api/generate/simple", async (req, res) => {
     Connection: "keep-alive",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Cache-Control",
-  })
+  });
 
   const sendEvent = (event, data) => {
-    res.write(`event: ${event}\n`)
-    res.write(`data: ${JSON.stringify({ ...data, timestamp: new Date().toISOString() })}\n\n`)
-  }
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify({ ...data, timestamp: new Date().toISOString() })}\n\n`);
+  };
 
   try {
-    const { prompt, subdomain } = req.body
-    const nginxEnabled = process.env.NGINX_ENABLED === "true"
-
-    console.log(chalk.cyan(`🔍 Debug - NGINX_ENABLED: ${process.env.NGINX_ENABLED}`))
-    console.log(chalk.cyan(`🔍 Debug - nginxEnabled: ${nginxEnabled}`))
-    console.log(chalk.cyan(`🔍 Debug - subdomain: ${subdomain}`))
-    console.log(chalk.cyan(`🔍 Debug - Will deploy to nginx: ${nginxEnabled && subdomain}`))
+    const { prompt, subdomain } = req.body;
+    const nginxEnabled = process.env.NGINX_ENABLED === "true";
+    console.log(chalk.cyan(`🔍 Debug - NGINX_ENABLED: ${process.env.NGINX_ENABLED}`));
+    console.log(chalk.cyan(`🔍 Debug - nginxEnabled: ${nginxEnabled}`));
+    console.log(chalk.cyan(`🔍 Debug - subdomain: ${subdomain}`));
+    console.log(chalk.cyan(`🔍 Debug - Will deploy to nginx: ${nginxEnabled && subdomain}`));
 
     if (!prompt || !prompt.trim()) {
       sendEvent("error", {
         error: "Game description is required",
         chatId,
-      })
-      res.end()
-      return
+      });
+      res.end();
+      return;
     }
 
     // Check if nginx deployment is requested
     if (nginxEnabled && subdomain) {
-      console.log(chalk.blue(`Starting NGINX deployment for subdomain: ${subdomain}`))
-
+      console.log(chalk.blue(`Starting NGINX deployment for subdomain: ${subdomain}`));
       sendEvent("progress", {
         step: 0,
         totalSteps: 2,
         stepName: "Initialization",
         progress: 0,
         message: `Starting nginx deployment for ${subdomain}.claw.codes...`,
-      })
+      });
     } else {
-      console.log(chalk.blue(`Starting SIMPLE chain generation for Chat ${chatId}`))
-
+      console.log(chalk.blue(`Starting SIMPLE chain generation for Chat ${chatId}`));
       sendEvent("progress", {
         step: 0,
         totalSteps: 2,
         stepName: "Initialization",
         progress: 0,
         message: "Starting simple AI chain (Groq → Qwen3)...",
-      })
+      });
     }
 
-    console.log(chalk.blue(`Game Request: ${prompt}`))
+    console.log(chalk.blue(`Game Request: ${prompt}`));
 
     // Step 1: Groq explanation
     sendEvent("progress", {
@@ -1469,17 +1465,15 @@ app.post("/api/generate/simple", async (req, res) => {
       stepName: "Groq Architecture",
       progress: 25,
       message: "Getting comprehensive game explanation from Groq...",
-    })
-
-    const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId)
-
+    });
+    const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId);
     sendEvent("progress", {
       step: 1,
       totalSteps: 2,
       stepName: "Groq Architecture",
       progress: 50,
       message: "Game architecture explanation completed",
-    })
+    });
 
     // Step 2: Qwen3 code generation
     sendEvent("progress", {
@@ -1488,21 +1482,19 @@ app.post("/api/generate/simple", async (req, res) => {
       stepName: "Qwen3 Code Generation",
       progress: 60,
       message: "Generating clean, production-ready code with Qwen3...",
-    })
-
-    const qwenFinalCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId)
-
+    });
+    const qwenFinalCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId);
     sendEvent("progress", {
       step: 2,
       totalSteps: 2,
       stepName: "Qwen3 Code Generation",
       progress: 80,
       message: "Code generation completed, parsing files...",
-    })
+    });
 
     // Parse and clean files
-    const validationResult = validateAndParseWebGameFiles(qwenFinalCode, chatId)
-    const completeFiles = createCompleteFileStructure(validationResult.files, validationResult.missingFiles, prompt)
+    const validationResult = validateAndParseWebGameFiles(qwenFinalCode, chatId);
+    const completeFiles = createCompleteFileStructure(validationResult.files, validationResult.missingFiles, prompt);
 
     // Stream each file
     sendEvent("progress", {
@@ -1511,8 +1503,7 @@ app.post("/api/generate/simple", async (req, res) => {
       stepName: "File Processing",
       progress: 90,
       message: `Streaming ${completeFiles.length} files...`,
-    })
-
+    });
     completeFiles.forEach((file, index) => {
       sendEvent("file_generated", {
         fileName: file.name,
@@ -1521,17 +1512,16 @@ app.post("/api/generate/simple", async (req, res) => {
         size: file.content.length,
         index: index + 1,
         totalFiles: completeFiles.length,
-      })
-    })
+      });
+    });
 
     // Generate project metadata
-    const projectId = uuidv4()
+    const projectId = uuidv4();
 
     // Check if nginx deployment is enabled and subdomain provided
     if (nginxEnabled && subdomain) {
       // Deploy to nginx
-      const deployedUrl = await deployToNginx(subdomain, completeFiles, prompt, chatId, sendEvent)
-
+      const { httpUrl, httpsUrl } = await deployToNginx(subdomain, completeFiles, prompt, chatId, sendEvent);
       sendEvent("complete", {
         chatId,
         projectId: subdomain,
@@ -1542,9 +1532,10 @@ app.post("/api/generate/simple", async (req, res) => {
         deploymentType: "nginx",
         chainSteps: ["Groq - Game explanation and architecture", "Qwen3 - Complete clean code generation"],
         setupInstructions: {
-          deployedUrl: deployedUrl,
+          previewUrl: httpUrl, // Use HTTPS as previewUrl
+          httpUrl: httpsUrl, // Optional: include HTTP for reference
           subdomain: subdomain,
-          nginxPath: `/var/www/projects/${subdomain}`,
+          nginxPath: `/var/www/projects/${subdomain}.claw.codes`,
           generatedPath: `generated/${subdomain}`,
         },
         validation: {
@@ -1553,10 +1544,9 @@ app.post("/api/generate/simple", async (req, res) => {
           originalFiles: validationResult.files.length,
           missingFiles: validationResult.missingFiles,
         },
-      })
-
-      console.log(chalk.green(`NGINX deployment completed for Chat ${chatId}!`))
-      console.log(chalk.green(`🌐 Game deployed at: ${deployedUrl}`))
+      });
+      console.log(chalk.green(`NGINX deployment completed for Chat ${chatId}!`));
+      console.log(chalk.green(`🌐 Game deployed at: ${httpUrl}, ${httpsUrl}`));
     } else {
       // Original localhost behavior
       sendEvent("progress", {
@@ -1565,11 +1555,9 @@ app.post("/api/generate/simple", async (req, res) => {
         stepName: "Project Setup",
         progress: 95,
         message: "Saving files and setting up project...",
-      })
-
-      const projectPath = await saveGeneratedFiles(projectId, completeFiles)
-      const serverInfo = await setupAndRunProject(projectPath)
-
+      });
+      const projectPath = await saveGeneratedFiles(projectId, completeFiles);
+      const serverInfo = await setupAndRunProject(projectPath);
       sendEvent("complete", {
         chatId,
         projectId,
@@ -1583,8 +1571,7 @@ app.post("/api/generate/simple", async (req, res) => {
           npmInstall: "npm install",
           startCommand: "npm start",
           serveCommand: "npx serve . -p 3000",
-          url: serverInfo.url,
-          liveUrl: serverInfo.url,
+          previewUrl: serverInfo.url, // Use serverInfo.url as previewUrl for consistency
           port: serverInfo.port,
           projectPath: projectPath,
         },
@@ -1594,22 +1581,20 @@ app.post("/api/generate/simple", async (req, res) => {
           originalFiles: validationResult.files.length,
           missingFiles: validationResult.missingFiles,
         },
-      })
-
-      console.log(chalk.green(`SIMPLE chain completed for Chat ${chatId}!`))
-      console.log(chalk.green(`🎮 Game is running at: ${serverInfo.url}`))
+      });
+      console.log(chalk.green(`SIMPLE chain completed for Chat ${chatId}!`));
+      console.log(chalk.green(`🎮 Game is running at: ${serverInfo.url}`));
     }
   } catch (error) {
-    console.error(chalk.red(`Error in Simple Chain Chat ${chatId}:`, error.message))
+    console.error(chalk.red(`Error in Simple Chain Chat ${chatId}:`, error.message));
     sendEvent("error", {
       error: "Failed to generate web game",
       details: error.message,
       chatId,
-    })
+    });
   }
-
-  res.end()
-})
+  res.end();
+});
 
 // ============================================================================
 // START THE SERVER
