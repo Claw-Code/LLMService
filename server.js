@@ -20,6 +20,10 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 3005
 
+const GENERATED_PROJECTS_PATH = process.env.GENERATED_PROJECTS_PATH || "generated-projects2"
+const NGINX_PROJECTS_PATH = process.env.NGINX_PROJECTS_PATH || "nginx-projects"
+const DEPLOY_LOG_PATH = process.env.DEPLOY_LOG_PATH || "deploy-log.txt"
+
 app.use(cors())
 app.use(express.json())
 app.use(express.static("public"))
@@ -255,9 +259,9 @@ async function findAvailablePort(startPort = 8100) {
   const checkPort = (port) => {
     return new Promise((resolve) => {
       const server = net.createServer()
-      
-      server.once('error', (err) => {
-        if (err.code === 'EADDRINUSE') {
+
+      server.once("error", (err) => {
+        if (err.code === "EADDRINUSE") {
           // Port is in use
           resolve(false)
         } else {
@@ -265,15 +269,15 @@ async function findAvailablePort(startPort = 8100) {
           resolve(false)
         }
       })
-      
-      server.once('listening', () => {
+
+      server.once("listening", () => {
         server.close(() => {
           // Port is available
           resolve(true)
         })
       })
-      
-      server.listen(port, '127.0.0.1')
+
+      server.listen(port, "127.0.0.1")
     })
   }
 
@@ -286,8 +290,8 @@ async function findAvailablePort(startPort = 8100) {
       console.log(chalk.yellow(`⚠️  Port ${port} is in use, trying next...`))
     }
   }
-  
-  throw new Error('No available port found in range ' + startPort + '-' + (startPort + 100))
+
+  throw new Error("No available port found in range " + startPort + "-" + (startPort + 100))
 }
 
 // Save generated files to disk
@@ -310,17 +314,14 @@ async function saveGeneratedFiles(projectId, files) {
     main: "main.js",
     scripts: {
       start: "npx serve . -p 8080",
-      dev: "npx serve . -p 8080"
+      dev: "npx serve . -p 8080",
     },
     keywords: ["game", "html5", "canvas"],
     author: "AI Generator",
-    license: "MIT"
+    license: "MIT",
   }
 
-  await fs.writeFile(
-    path.join(projectPath, 'package.json'),
-    JSON.stringify(packageJson, null, 2)
-  )
+  await fs.writeFile(path.join(projectPath, "package.json"), JSON.stringify(packageJson, null, 2))
 
   return projectPath
 }
@@ -333,15 +334,15 @@ async function setupAndRunProject(projectPath) {
       console.log(chalk.cyan(`📦 Running npm install in ${projectPath}...`))
 
       // Run npm install
-      const npmInstall = spawn('npm', ['install'], {
+      const npmInstall = spawn("npm", ["install"], {
         cwd: projectPath,
         shell: true,
-        stdio: 'pipe'
+        stdio: "pipe",
       })
 
-      npmInstall.on('close', async (code) => {
+      npmInstall.on("close", async (code) => {
         if (code !== 0) {
-          console.log(chalk.yellow('npm install skipped or had issues (continuing anyway)'))
+          console.log(chalk.yellow("npm install skipped or had issues (continuing anyway)"))
         }
 
         // Find available port
@@ -349,49 +350,49 @@ async function setupAndRunProject(projectPath) {
         console.log(chalk.cyan(`🚀 Starting server on port ${port}...`))
 
         // Start the server
-        const serverProcess = spawn('npx', ['serve', '.', '-p', port.toString()], {
+        const serverProcess = spawn("npx", ["serve", ".", "-p", port.toString()], {
           cwd: projectPath,
           shell: true,
-          stdio: 'pipe',
-          detached: false
+          stdio: "pipe",
+          detached: false,
         })
 
         // Check if server started successfully
         let serverStarted = false
-        
-         serverProcess.stdout.on('data', (data) => {
-          const output = data.toString();
-          console.log(chalk.gray(`Server output: ${output}`));
-        
+
+        serverProcess.stdout.on("data", (data) => {
+          const output = data.toString()
+          console.log(chalk.gray(`Server output: ${output}`))
+
           // Regex to extract port from Serve's standard message
-          const match = output.match(/http:\/\/localhost:(\d+)/);
+          const match = output.match(/http:\/\/localhost:(\d+)/)
           if (match && !serverStarted) {
-            serverStarted = true;
-            const realPort = match[1];
-            const serverUrl = `http://localhost:${realPort}`;
-            console.log(chalk.green(`✅ Server running at ${serverUrl}`));
+            serverStarted = true
+            const realPort = match[1]
+            const serverUrl = `http://localhost:${realPort}`
+            console.log(chalk.green(`✅ Server running at ${serverUrl}`))
             resolve({
               url: serverUrl,
-              port: parseInt(realPort),
-              process: serverProcess
-            });
-          } else if (!serverStarted && (output.includes('localhost') || output.includes('Listening'))) {
+              port: Number.parseInt(realPort),
+              process: serverProcess,
+            })
+          } else if (!serverStarted && (output.includes("localhost") || output.includes("Listening"))) {
             // Fallback: if regex doesn't work but message looks server-like
             setTimeout(() => {
               if (!serverStarted) {
-                const serverUrl = `http://localhost:${port}`;
-                console.log(chalk.yellow(`⚠️  Fall back to assumed URL: ${serverUrl}`));
+                const serverUrl = `http://localhost:${port}`
+                console.log(chalk.yellow(`⚠️  Fall back to assumed URL: ${serverUrl}`))
                 resolve({
                   url: serverUrl,
                   port: port,
-                  process: serverProcess
-                });
+                  process: serverProcess,
+                })
               }
-            }, 1000);
+            }, 1000)
           }
-        });
+        })
 
-        serverProcess.stderr.on('data', (data) => {
+        serverProcess.stderr.on("data", (data) => {
           console.log(chalk.gray(`Server stderr: ${data.toString()}`))
         })
 
@@ -403,24 +404,23 @@ async function setupAndRunProject(projectPath) {
             resolve({
               url: serverUrl,
               port: port,
-              process: serverProcess
+              process: serverProcess,
             })
           }
         }, 5000)
 
-        serverProcess.on('error', (error) => {
-          console.error(chalk.red('Server error:', error))
+        serverProcess.on("error", (error) => {
+          console.error(chalk.red("Server error:", error))
           if (!serverStarted) {
             reject(error)
           }
         })
       })
 
-      npmInstall.on('error', (error) => {
-        console.error(chalk.red('npm install error:', error))
+      npmInstall.on("error", (error) => {
+        console.error(chalk.red("npm install error:", error))
         reject(error)
       })
-
     } catch (error) {
       reject(error)
     }
@@ -980,253 +980,158 @@ window.Player = Player;`,
   return completeFiles
 }
 
-// ============================================================================
-// STREAMING API ENDPOINTS
-// ============================================================================
-
-/**
- * @swagger
- * /api/generate/simple:
- *   post:
- *     summary: Generate web game using simple 2-step AI chain (Groq → Qwen3)
- *     description: |
- *       Streams the generation process of an HTML5 Canvas web game using a simplified 2-step AI chain.
- *       Returns Server-Sent Events (SSE) with progress updates and all generated files.
- *
- *       **Chain Steps:**
- *       1. Groq (LLaMA 3.3 70B) - Game explanation and architecture
- *       2. Qwen3 Coder - Complete clean code generation
- *
- *       **Stream Events:**
- *       - `progress` - Progress updates with step information
- *       - `file_generated` - Individual file content as it's generated
- *       - `complete` - Final completion with project metadata
- *       - `error` - Error information if generation fails
- *     tags:
- *       - Game Generation
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/GamePrompt'
- *           examples:
- *             snake_game:
- *               summary: Snake Game
- *               value:
- *                 prompt: "Create a Snake game with HTML5 Canvas, smooth movement, food collection, score system, collision detection, and responsive mobile controls"
- *             tetris_game:
- *               summary: Tetris Game
- *               value:
- *                 prompt: "Build a Tetris game with HTML5 Canvas, piece rotation, line clearing, increasing difficulty, and responsive design"
- *     responses:
- *       200:
- *         description: Server-Sent Events stream with generation progress and files
- *         content:
- *           text/event-stream:
- *             schema:
- *               type: string
- *               description: |
- *                 Stream of events in Server-Sent Events format:
- *
- *                 ```
- *                 event: progress
- *                 data: {"step": 1, "totalSteps": 2, "stepName": "Groq Architecture", "progress": 25, "message": "Getting game explanation..."}
- *
- *                 event: file_generated
- *                 data: {"fileName": "index.html", "fileType": "html", "content": "<!DOCTYPE html>...", "size": 1234}
- *
- *                 event: complete
- *                 data: {"chatId": 123, "projectId": "uuid", "totalFiles": 10, "chainUsed": "simple"}
- *                 ```
- *             examples:
- *               progress_event:
- *                 summary: Progress Event
- *                 value: |
- *                   event: progress
- *                   data: {"step": 1, "totalSteps": 2, "stepName": "Groq Architecture", "progress": 50, "message": "Generating game explanation..."}
- *               file_event:
- *                 summary: File Generated Event
- *                 value: |
- *                   event: file_generated
- *                   data: {"fileName": "gameManager.js", "fileType": "js", "content": "class GameManager { ... }", "size": 2048}
- *       400:
- *         description: Invalid request - missing or invalid prompt
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Game description is required"
- *       500:
- *         description: Internal server error during generation
- *         content:
- *           text/event-stream:
- *             schema:
- *               type: string
- *               example: |
- *                 event: error
- *                 data: {"error": "AI generation failed", "details": "Connection timeout", "chatId": 123}
- */
-app.post("/api/generate/simple", async (req, res) => {
-  const chatId = chatCounter++
-
-  // Set up Server-Sent Events
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Cache-Control",
-  })
-
-  const sendEvent = (event, data) => {
-    res.write(`event: ${event}\n`)
-    res.write(`data: ${JSON.stringify({ ...data, timestamp: new Date().toISOString() })}\n\n`)
-  }
+// Nginx deployment function
+async function deployToNginx(subdomain, files, prompt, chatId, sendEvent) {
+  const { exec } = await import("child_process")
+  const util = await import("util")
+  const execAsync = util.promisify(exec)
 
   try {
-    const { prompt } = req.body
+    // Sanitize subdomain
+    const sanitizedSubdomain = subdomain
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "")
+      .substring(0, 63)
+    if (!sanitizedSubdomain) throw new Error("Invalid subdomain")
 
-    if (!prompt || !prompt.trim()) {
-      sendEvent("error", {
-        error: "Game description is required",
-        chatId,
-      })
-      res.end()
-      return
+    // Create generated project directory - ensure absolute path
+    const generatedPath = path.isAbsolute(GENERATED_PROJECTS_PATH)
+      ? path.join(GENERATED_PROJECTS_PATH, sanitizedSubdomain)
+      : path.join(__dirname, GENERATED_PROJECTS_PATH, sanitizedSubdomain)
+    await fs.ensureDir(generatedPath)
+
+    console.log(chalk.cyan(`📁 Creating project in ${generatedPath}`))
+
+    // Save all files to generated directory
+    for (const file of files) {
+      const filePath = path.join(generatedPath, file.name)
+      await fs.writeFile(filePath, file.content)
+      console.log(chalk.green(`✅ Saved ${file.name}`))
     }
 
-    console.log(chalk.blue(`Starting SIMPLE chain generation for Chat ${chatId}`))
-    console.log(chalk.blue(`Game Request: ${prompt}`))
+    // Create package.json for build process
+    const packageJson = {
+      name: `web-game-${sanitizedSubdomain}`,
+      version: "1.0.0",
+      description: `AI Generated Web Game: ${prompt}`,
+      main: "index.html",
+      scripts: {
+        start: "npx serve . -p 3000",
+        build:
+          "mkdir -p dist && cp -r *.html *.js *.css *.json dist/ 2>/dev/null || cp -r *.html *.js *.css *.json build/ 2>/dev/null || echo 'Static files copied'",
+        dev: "npx serve . -p 3000",
+      },
+      keywords: ["game", "html5", "canvas", "ai-generated"],
+      author: "AI Generator",
+      license: "MIT",
+    }
+
+    await fs.writeFile(path.join(generatedPath, "package.json"), JSON.stringify(packageJson, null, 2))
 
     sendEvent("progress", {
-      step: 0,
-      totalSteps: 2,
-      stepName: "Initialization",
-      progress: 0,
-      message: "Starting simple AI chain (Groq → Qwen3)...",
+      step: 3,
+      totalSteps: 4,
+      stepName: "Building Project",
+      progress: 88,
+      message: "Running npm install and build...",
     })
 
-    // Step 1: Groq explanation
+    // Run npm install
+    console.log(chalk.cyan(`📦 Running npm install in ${generatedPath}`))
+    try {
+      await execAsync("npm install", { cwd: generatedPath, timeout: 60000 })
+    } catch (installError) {
+      console.log(chalk.yellow("npm install had issues, continuing with build..."))
+    }
+
+    // Run build
+    console.log(chalk.cyan(`🔨 Running build in ${generatedPath}`))
+    try {
+      await execAsync("npm run build", { cwd: generatedPath, timeout: 30000 })
+    } catch (buildError) {
+      console.log(chalk.yellow("Build command had issues, using source files directly..."))
+    }
+
+    // Determine build output directory
+    const distPath = path.join(generatedPath, "dist")
+    const buildPath = path.join(generatedPath, "build")
+    let buildOutputPath = generatedPath // Default to source files
+
+    if (await fs.pathExists(distPath)) {
+      buildOutputPath = distPath
+      console.log(chalk.green("✅ Using dist/ output"))
+    } else if (await fs.pathExists(buildPath)) {
+      buildOutputPath = buildPath
+      console.log(chalk.green("✅ Using build/ output"))
+    } else {
+      console.log(chalk.yellow("⚠️  No build output found, using source files"))
+    }
+
     sendEvent("progress", {
-      step: 1,
-      totalSteps: 2,
-      stepName: "Groq Architecture",
-      progress: 25,
-      message: "Getting comprehensive game explanation from Groq...",
+      step: 3,
+      totalSteps: 4,
+      stepName: "Deploying to Nginx",
+      progress: 92,
+      message: "Copying files to nginx directory...",
     })
 
-    const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId)
+    // Create nginx project directory - ensure absolute path
+    const nginxPath = path.isAbsolute(NGINX_PROJECTS_PATH)
+      ? path.join(NGINX_PROJECTS_PATH, subdomain)
+      : path.join(__dirname, NGINX_PROJECTS_PATH, subdomain)
+    await fs.ensureDir(nginxPath)
+
+    // Copy build output to nginx directory
+    console.log(chalk.cyan(`📋 Copying from ${buildOutputPath} to ${nginxPath}`))
+    await fs.copy(buildOutputPath, nginxPath, { overwrite: true })
 
     sendEvent("progress", {
-      step: 1,
-      totalSteps: 2,
-      stepName: "Groq Architecture",
-      progress: 50,
-      message: "Game architecture explanation completed",
+      step: 3,
+      totalSteps: 4,
+      stepName: "Reloading Nginx",
+      progress: 96,
+      message: "Reloading nginx configuration...",
     })
 
-    // Step 2: Qwen3 code generation
-    sendEvent("progress", {
-      step: 2,
-      totalSteps: 2,
-      stepName: "Qwen3 Code Generation",
-      progress: 60,
-      message: "Generating clean, production-ready code with Qwen3...",
-    })
+    // Reload nginx
+    console.log(chalk.cyan("🔄 Reloading nginx..."))
+    try {
+      await execAsync("nginx -s reload")
+      console.log(chalk.green("✅ Nginx reloaded successfully"))
+    } catch (nginxError) {
+      console.log(chalk.yellow("⚠️  Nginx reload had issues:", nginxError.message))
+    }
 
-    const qwenFinalCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId)
+    // Log deployment - ensure absolute path
+    const deployLogPath = path.isAbsolute(DEPLOY_LOG_PATH) ? DEPLOY_LOG_PATH : path.join(__dirname, DEPLOY_LOG_PATH)
 
-    sendEvent("progress", {
-      step: 2,
-      totalSteps: 2,
-      stepName: "Qwen3 Code Generation",
-      progress: 80,
-      message: "Code generation completed, parsing files...",
-    })
+    const deployTime = new Date().toISOString()
+    const logEntry = `${deployTime} - Deployed ${subdomain} (Chat ${chatId}) - ${prompt.slice(0, 100)}\n`
 
-    // Parse and clean files
-    const validationResult = validateAndParseWebGameFiles(qwenFinalCode, chatId)
-    const completeFiles = createCompleteFileStructure(validationResult.files, validationResult.missingFiles, prompt)
+    try {
+      await fs.appendFile(deployLogPath, logEntry)
+    } catch (logError) {
+      console.log(chalk.yellow("⚠️  Could not write to deploy log:", logError.message))
+    }
 
-    // Stream each file
-    sendEvent("progress", {
-      step: 2,
-      totalSteps: 2,
-      stepName: "File Processing",
-      progress: 90,
-      message: `Streaming ${completeFiles.length} files...`,
-    })
+    // Update environment variable with deployed URL
+    const deployedUrl = `https://${subdomain}.claw.codes`
+    try {
+      const currentUrls = process.env.DEPLOYED_URLS || "http://localhost:3005"
+      const updatedUrls = currentUrls.includes(deployedUrl) ? currentUrls : `${currentUrls},${deployedUrl}`
+      process.env.DEPLOYED_URLS = updatedUrls
+      console.log(chalk.green(`✅ Updated DEPLOYED_URLS: ${updatedUrls}`))
+    } catch (envError) {
+      console.log(chalk.yellow("⚠️  Could not update DEPLOYED_URLS:", envError.message))
+    }
 
-    completeFiles.forEach((file, index) => {
-      sendEvent("file_generated", {
-        fileName: file.name,
-        fileType: file.type,
-        content: file.content,
-        size: file.content.length,
-        index: index + 1,
-        totalFiles: completeFiles.length,
-      })
-    })
-
-    // Generate project metadata
-    const projectId = uuidv4()
-
-    // Save files to disk and setup project
-    sendEvent("progress", {
-      step: 2,
-      totalSteps: 2,
-      stepName: "Project Setup",
-      progress: 95,
-      message: "Saving files and setting up project...",
-    })
-
-    const projectPath = await saveGeneratedFiles(projectId, completeFiles)
-    const serverInfo = await setupAndRunProject(projectPath)
-
-    
-      sendEvent("complete", {
-        chatId,
-        projectId,
-        totalFiles: completeFiles.length,
-        aiGeneratedFiles: validationResult.files.length,
-        missingFilesGenerated: validationResult.missingFiles.length,
-        chainUsed: "simple",
-        chainSteps: ["Groq - Game explanation and architecture", "Qwen3 - Complete clean code generation"],
-        setupInstructions: {
-          npmInstall: "npm install",
-          startCommand: "npm start",
-          serveCommand: "npx serve . -p 3000",
-          url: serverInfo.url,
-          liveUrl: serverInfo.url,
-          port: serverInfo.port,
-          projectPath: projectPath
-        },
-        validation: {
-          isComplete: validationResult.isComplete,
-          totalFiles: completeFiles.length,
-          originalFiles: validationResult.files.length,
-          missingFiles: validationResult.missingFiles,
-        },
-      })
-      console.log(chalk.green(`SIMPLE chain completed for Chat ${chatId}!`))
-      console.log(chalk.green(`🎮 Game is running at: ${serverInfo.url}`))    
-  
+    console.log(chalk.green(`🚀 Successfully deployed to ${deployedUrl}`))
+    return deployedUrl
   } catch (error) {
-    console.error(chalk.red(`Error in Simple Chain Chat ${chatId}:`, error.message))
-    sendEvent("error", {
-      error: "Failed to generate web game",
-      details: error.message,
-      chatId,
-    })
+    console.error(chalk.red(`❌ Nginx deployment failed:`, error.message))
+    throw new Error(`Deployment failed: ${error.message}`)
   }
- 
-  res.end()
-  
-})
+}
 
 /**
  * @swagger
@@ -1272,7 +1177,7 @@ app.post("/api/generate/simple", async (req, res) => {
  *               description: |
  *                 Stream of events in Server-Sent Events format with additional step completion events:
  *
- *                 ```
+ *                 \`\`\`
  *                 event: progress
  *                 data: {"step": 3, "totalSteps": 4, "stepName": "Anthropic Validation", "progress": 75, "message": "Validating generated code..."}
  *
@@ -1284,7 +1189,7 @@ app.post("/api/generate/simple", async (req, res) => {
  *
  *                 event: complete
  *                 data: {"chatId": 124, "projectId": "uuid", "totalFiles": 10, "chainUsed": "full"}
- *                 ```
+ *                 \`\`\`
  *       400:
  *         description: Invalid request - missing or invalid prompt
  *       500:
@@ -1470,19 +1375,15 @@ app.post("/api/generate/full", async (req, res) => {
         url: serverInfo.url,
         liveUrl: serverInfo.url,
         port: serverInfo.port,
-        projectPath: projectPath
+        projectPath: `${PROJECTS_DIR}/${projectId}`,
+        deploymentType: "localhost",
+        subdomain: null,
       },
       validation: {
         isComplete: validationResult.isComplete,
         totalFiles: completeFiles.length,
         originalFiles: validationResult.files.length,
         missingFiles: validationResult.missingFiles,
-      },
-      chainDetails: {
-        groqExplanationLength: groqExplanation.length,
-        qwenInitialCodeLength: qwenInitialCode.length,
-        anthropicFeedbackLength: anthropicFeedback.length,
-        qwenFinalCodeLength: qwenFinalCode.length,
       },
     })
 
@@ -1500,621 +1401,220 @@ app.post("/api/generate/full", async (req, res) => {
   res.end()
 })
 
-// ============================================================================
-// ADDITIONAL API ENDPOINTS
-// ============================================================================
-
-/**
- * @swagger
- * /api/health:
- *   get:
- *     summary: Health check endpoint
- *     description: Returns the current status of the API and all connected services
- *     tags:
- *       - System
- *     responses:
- *       200:
- *         description: API is healthy and all services are operational
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   example: "healthy"
- *                 timestamp:
- *                   type: string
- *                   format: date-time
- *                 chatCounter:
- *                   type: integer
- *                   description: Number of chat sessions processed
- *                 services:
- *                   type: object
- *                   properties:
- *                     groq:
- *                       type: boolean
- *                       description: Groq API availability
- *                     anthropic:
- *                       type: boolean
- *                       description: Anthropic API availability
- *                     openrouter:
- *                       type: boolean
- *                       description: OpenRouter API availability
- *                     langsmith:
- *                       type: boolean
- *                       description: LangSmith tracing availability
- *                 chains:
- *                   type: object
- *                   properties:
- *                     simple:
- *                       type: string
- *                       example: "Groq → Qwen3"
- *                     full:
- *                       type: string
- *                       example: "Groq → Qwen3 → Anthropic → Qwen3"
- */
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "healthy",
-    timestamp: new Date().toISOString(),
-    chatCounter: chatCounter - 1,
-    activeConversations: conversationContexts.size,
-    services: {
-      groq: Boolean(process.env.GROQ_API_KEY),
-      anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
-      openrouter: Boolean(process.env.OPENROUTER_API_KEY),
-      langsmith: Boolean(process.env.LANGSMITH_API_KEY),
-    },
-    chains: {
-      simple: "Groq → Qwen3 (2 steps)",
-      full: "Groq → Qwen3 → Anthropic → Qwen3 (4 steps)",
-    },
-    features: {
-      streaming: true,
-      fileGeneration: true,
-      codeCleanup: true,
-      npmSetup: true,
-    },
-  })
-})
-
-/**
- * @swagger
- * /:
- *   get:
- *     summary: API documentation and testing interface
- *     description: Returns an HTML interface for testing the streaming API endpoints
- *     tags:
- *       - System
- *     responses:
- *       200:
- *         description: HTML testing interface
- *         content:
- *           text/html:
- *             schema:
- *               type: string
- */
-app.get("/", (req, res) => {
-  res.send(`<!DOCTYPE html>
-<html>
-<head>
-    <title>Web Game AI Generator - Streaming API</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #1a1a2e; color: white; }
-        h1 { color: #ff8c00; text-align: center; }
-        .api-section { background: #2a2a3e; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .api-section h3 { color: #4CAF50; margin-top: 0; }
-        .endpoint { background: #333; padding: 15px; border-radius: 5px; margin: 10px 0; }
-        .method { display: inline-block; padding: 5px 10px; border-radius: 3px; font-weight: bold; margin-right: 10px; }
-        .post { background: #ff6b35; }
-        .get { background: #4CAF50; }
-        .form-group { margin: 15px 0; }
-        label { display: block; margin-bottom: 5px; color: #ff8c00; font-weight: bold; }
-        textarea, select { width: 100%; padding: 10px; background: #444; color: white; border: 1px solid #666; border-radius: 5px; }
-        button { background: #ff8c00; color: white; padding: 12px 25px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }
-        button:hover { background: #ff6600; }
-        button:disabled { background: #666; cursor: not-allowed; }
-        .output { background: #222; padding: 15px; border-radius: 5px; margin-top: 15px; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 14px; }
-        .event { margin: 5px 0; padding: 8px; border-left: 3px solid #4CAF50; background: rgba(76, 175, 80, 0.1); }
-        .error { border-left-color: #f44336; background: rgba(244, 67, 54, 0.1); }
-        .file { border-left-color: #2196F3; background: rgba(33, 150, 243, 0.1); }
-        .complete { border-left-color: #ff8c00; background: rgba(255, 140, 0, 0.1); }
-        .links { margin-top: 20px; text-align: center; }
-        .links a { display: inline-block; margin: 10px; padding: 15px 25px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-        .links a:hover { background: #0056b3; }
-        .game-url { color: #4CAF50; font-weight: bold; text-decoration: underline; cursor: pointer; }
-    </style>
-</head>
-<body>
-    <h1>🚀 Web Game AI Generator - Streaming API</h1>
-    
-    <div class="api-section">
-        <h3>📡 Available Endpoints</h3>
-        <div class="endpoint">
-            <span class="method post">POST</span>
-            <strong>/api/generate/simple</strong> - 2-Step Chain (Groq → Qwen3)
-            <p>Fast generation with clean code output. No validation step.</p>
-        </div>
-        <div class="endpoint">
-            <span class="method post">POST</span>
-            <strong>/api/generate/full</strong> - 4-Step Chain (Groq → Qwen3 → Anthropic → Qwen3)
-            <p>Complete generation with validation and fixes. Higher quality output.</p>
-        </div>
-        <div class="endpoint">
-            <span class="method get">GET</span>
-            <strong>/api/health</strong> - Health Check
-            <p>Check API status and service availability.</p>
-        </div>
-        <div class="endpoint">
-            <span class="method get">GET</span>
-            <strong>/api-docs</strong> - Swagger Documentation
-            <p>Complete OpenAPI documentation with interactive testing.</p>
-        </div>
-    </div>
-    
-    <div class="api-section">
-        <h3>🧪 Test Streaming API</h3>
-        <form id="testForm">
-            <div class="form-group">
-                <label>API Endpoint:</label>
-                <select id="endpoint">
-                    <option value="/api/generate/simple">Simple Chain (2 steps)</option>
-                    <option value="/api/generate/full">Full Chain (4 steps)</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Game Description:</label>
-                <textarea id="prompt" rows="4" placeholder="Create a Snake game with HTML5 Canvas, smooth movement, food collection, score system, collision detection, and responsive mobile controls..."></textarea>
-            </div>
-            <button type="submit" id="generateBtn">🚀 Start Streaming Generation</button>
-            <button type="button" id="clearBtn">🗑️ Clear Output</button>
-        </form>
-        
-        <div id="output" class="output" style="display: none;">
-            <div id="events"></div>
-        </div>
-    </div>
-    
-    <div class="links">
-        <a href="/api-docs" target="_blank">📚 Swagger Documentation</a>
-        <a href="/api/health" target="_blank">🏥 Health Check</a>
-        <a href="https://github.com/your-repo" target="_blank">📦 GitHub Repository</a>
-    </div>
-
-    <script>
-        let eventSource = null;
-        let fileCount = 0;
-        
-        document.getElementById('testForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const endpoint = document.getElementById('endpoint').value;
-            const prompt = document.getElementById('prompt').value;
-            const generateBtn = document.getElementById('generateBtn');
-            const output = document.getElementById('output');
-            const events = document.getElementById('events');
-            
-            if (!prompt.trim()) {
-                alert('Please enter a game description');
-                return;
-            }
-            
-            // Close existing connection
-            if (eventSource) {
-                eventSource.close();
-            }
-            
-            generateBtn.disabled = true;
-            generateBtn.textContent = '🔄 Generating...';
-            output.style.display = 'block';
-            events.innerHTML = '<div class="event">🚀 Starting generation...</div>';
-            fileCount = 0;
-            
-            try {
-                // Start Server-Sent Events connection
-                eventSource = new EventSource(\`\${endpoint}?\${new URLSearchParams({ prompt })}\`);
-                
-                // For POST request, we need to use fetch with EventSource simulation
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ prompt })
-                });
-                
-                if (!response.ok) {
-                    throw new Error(\`HTTP \${response.status}: \${response.statusText}\`);
-                }
-                
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    
-                    const chunk = decoder.decode(value);
-                    const lines = chunk.split('\\n');
-                    
-                    for (const line of lines) {
-                        if (line.startsWith('event: ')) {
-                            const eventType = line.substring(7);
-                        } else if (line.startsWith('data: ')) {
-                            try {
-                                const data = JSON.parse(line.substring(6));
-                                handleStreamEvent(eventType || 'message', data);
-                            } catch (e) {
-                                console.warn('Failed to parse event data:', line);
-                            }
-                        }
-                    }
-                }
-                
-            } catch (error) {
-                events.innerHTML += \`<div class="event error">❌ Error: \${error.message}</div>\`;
-            } finally {
-                generateBtn.disabled = false;
-                generateBtn.textContent = '🚀 Start Streaming Generation';
-            }
-        });
-        
-        function handleStreamEvent(eventType, data) {
-            const events = document.getElementById('events');
-            let eventHtml = '';
-            
-            switch (eventType) {
-                case 'progress':
-                    eventHtml = \`<div class="event">📊 Progress: Step \${data.step}/\${data.totalSteps} - \${data.stepName} (\${data.progress}%) - \${data.message}</div>\`;
-                    break;
-                    
-                case 'step_complete':
-                    eventHtml = \`<div class="event">✅ Step \${data.step} Complete: \${data.stepName} - \${data.output}</div>\`;
-                    break;
-                    
-                case 'file_generated':
-                    fileCount++;
-                    eventHtml = \`<div class="event file">📄 File \${fileCount}: \${data.fileName} (\${data.fileType}, \${data.size} chars)</div>\`;
-                    break;
-                    
-                case 'complete':
-                    eventHtml = \`<div class="event complete">🎉 Generation Complete! Chat ID: \${data.chatId}, Files: \${data.totalFiles}, Chain: \${data.chainUsed}</div>\`;
-                    if (data.setupInstructions && data.setupInstructions.liveUrl) {
-                        eventHtml += \`<div class="event complete">🎮 Game is now running at: <a href="\${data.setupInstructions.liveUrl}" target="_blank" class="game-url">\${data.setupInstructions.liveUrl}</a></div>\`;
-                    }
-                    eventHtml += \`<div class="event complete">🛠️ Setup: \${data.setupInstructions.npmInstall} → \${data.setupInstructions.startCommand}</div>\`;
-                    break;
-                    
-                case 'error':
-                    eventHtml = \`<div class="event error">❌ Error: \${data.error} - \${data.details || ''}</div>\`;
-                    break;
-                    
-                default:
-                    eventHtml = \`<div class="event">📨 \${eventType}: \${JSON.stringify(data)}</div>\`;
-            }
-            
-            events.innerHTML += eventHtml;
-            events.scrollTop = events.scrollHeight;
-        }
-        
-        document.getElementById('clearBtn').addEventListener('click', () => {
-            document.getElementById('events').innerHTML = '';
-            document.getElementById('output').style.display = 'none';
-            fileCount = 0;
-        });
-        
-        // Set default prompt
-        document.getElementById('prompt').value = 'Create a Snake game with HTML5 Canvas, smooth movement, food collection, score system, collision detection, and responsive mobile controls';
-    </script>
-</body>
-</html>`)
-})
-
-
-/**
- * @swagger
- * /api/followup:
- *   post:
- *     summary: Follow-up API for minor code fixes and queries
- *     description: |
- *       Receives test files, reads them, and uses LLaMA (via Groq) to fix issues or make minor changes.
- *       This endpoint is useful for quick iterations on already generated code.
- *     tags:
- *       - Code Modification
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: ["query", "files"]
- *             properties:
- *               query:
- *                 type: string
- *                 description: The fix or change requested
- *                 example: "Fix the collision detection in gameObjects.js - the player goes through walls"
- *               files:
- *                 type: array
- *                 description: Array of files to analyze and modify
- *                 items:
- *                   type: object
- *                   required: ["name", "content"]
- *                   properties:
- *                     name:
- *                       type: string
- *                       description: File name
- *                       example: "gameObjects.js"
- *                     content:
- *                       type: string
- *                       description: File content
- *               projectId:
- *                 type: string
- *                 description: Optional project ID for context
- *                 example: "uuid-1234-5678"
- *           examples:
- *             fix_collision:
- *               summary: Fix collision detection
- *               value:
- *                 query: "Fix the collision detection - player passes through walls"
- *                 files:
- *                   - name: "gameObjects.js"
- *                     content: "class Player extends GameObject { ... }"
- *                   - name: "config.js"
- *                     content: "const GameConfig = { ... }"
- *             add_feature:
- *               summary: Add new feature
- *               value:
- *                 query: "Add a pause functionality when pressing 'P' key"
- *                 files:
- *                   - name: "inputManager.js"
- *                     content: "class InputManager { ... }"
- *                   - name: "gameManager.js"
- *                     content: "class GameManager { ... }"
- *     responses:
- *       200:
- *         description: Successfully processed the follow-up request
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 query:
- *                   type: string
- *                   description: The original query
- *                 analysis:
- *                   type: string
- *                   description: LLaMA's analysis of the issue
- *                 modifiedFiles:
- *                   type: array
- *                   description: Array of modified files
- *                   items:
- *                     type: object
- *                     properties:
- *                       name:
- *                         type: string
- *                         example: "gameObjects.js"
- *                       content:
- *                         type: string
- *                         description: Updated file content
- *                       changes:
- *                         type: string
- *                         description: Summary of changes made
- *                 suggestions:
- *                   type: array
- *                   description: Additional suggestions from LLaMA
- *                   items:
- *                     type: string
- *                 chatId:
- *                   type: integer
- *                   description: Chat session ID for tracking
- *       400:
- *         description: Invalid request
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Query and files are required"
- *       500:
- *         description: Internal server error
- */
-app.post("/api/followup", async (req, res) => {
+app.post("/api/generate/simple", async (req, res) => {
   const chatId = chatCounter++
 
+  // Set up Server-Sent Events
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Cache-Control",
+  })
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`)
+    res.write(`data: ${JSON.stringify({ ...data, timestamp: new Date().toISOString() })}\n\n`)
+  }
+
   try {
-    const { query, files, projectId } = req.body
+    const { prompt, subdomain } = req.body
+    const nginxEnabled = process.env.NGINX_ENABLED === "true"
 
-    // Validation
-    if (!query || !query.trim()) {
-      return res.status(400).json({
-        error: "Query is required",
+    console.log(chalk.cyan(`🔍 Debug - NGINX_ENABLED: ${process.env.NGINX_ENABLED}`))
+    console.log(chalk.cyan(`🔍 Debug - nginxEnabled: ${nginxEnabled}`))
+    console.log(chalk.cyan(`🔍 Debug - subdomain: ${subdomain}`))
+    console.log(chalk.cyan(`🔍 Debug - Will deploy to nginx: ${nginxEnabled && subdomain}`))
+
+    if (!prompt || !prompt.trim()) {
+      sendEvent("error", {
+        error: "Game description is required",
         chatId,
+      })
+      res.end()
+      return
+    }
+
+    // Check if nginx deployment is requested
+    if (nginxEnabled && subdomain) {
+      console.log(chalk.blue(`Starting NGINX deployment for subdomain: ${subdomain}`))
+
+      sendEvent("progress", {
+        step: 0,
+        totalSteps: 2,
+        stepName: "Initialization",
+        progress: 0,
+        message: `Starting nginx deployment for ${subdomain}.claw.codes...`,
+      })
+    } else {
+      console.log(chalk.blue(`Starting SIMPLE chain generation for Chat ${chatId}`))
+
+      sendEvent("progress", {
+        step: 0,
+        totalSteps: 2,
+        stepName: "Initialization",
+        progress: 0,
+        message: "Starting simple AI chain (Groq → Qwen3)...",
       })
     }
 
-    if (!files || !Array.isArray(files) || files.length === 0) {
-      return res.status(400).json({
-        error: "Files array is required and must not be empty",
-        chatId,
+    console.log(chalk.blue(`Game Request: ${prompt}`))
+
+    // Step 1: Groq explanation
+    sendEvent("progress", {
+      step: 1,
+      totalSteps: 2,
+      stepName: "Groq Architecture",
+      progress: 25,
+      message: "Getting comprehensive game explanation from Groq...",
+    })
+
+    const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId)
+
+    sendEvent("progress", {
+      step: 1,
+      totalSteps: 2,
+      stepName: "Groq Architecture",
+      progress: 50,
+      message: "Game architecture explanation completed",
+    })
+
+    // Step 2: Qwen3 code generation
+    sendEvent("progress", {
+      step: 2,
+      totalSteps: 2,
+      stepName: "Qwen3 Code Generation",
+      progress: 60,
+      message: "Generating clean, production-ready code with Qwen3...",
+    })
+
+    const qwenFinalCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId)
+
+    sendEvent("progress", {
+      step: 2,
+      totalSteps: 2,
+      stepName: "Qwen3 Code Generation",
+      progress: 80,
+      message: "Code generation completed, parsing files...",
+    })
+
+    // Parse and clean files
+    const validationResult = validateAndParseWebGameFiles(qwenFinalCode, chatId)
+    const completeFiles = createCompleteFileStructure(validationResult.files, validationResult.missingFiles, prompt)
+
+    // Stream each file
+    sendEvent("progress", {
+      step: 2,
+      totalSteps: 2,
+      stepName: "File Processing",
+      progress: 90,
+      message: `Streaming ${completeFiles.length} files...`,
+    })
+
+    completeFiles.forEach((file, index) => {
+      sendEvent("file_generated", {
+        fileName: file.name,
+        fileType: file.type,
+        content: file.content,
+        size: file.content.length,
+        index: index + 1,
+        totalFiles: completeFiles.length,
       })
-    }
+    })
 
-    // Validate file structure
-    for (const file of files) {
-      if (!file.name || !file.content) {
-        return res.status(400).json({
-          error: "Each file must have 'name' and 'content' properties",
-          chatId,
-        })
-      }
-    }
+    // Generate project metadata
+    const projectId = uuidv4()
 
-    console.log(chalk.blue(`Processing follow-up request for Chat ${chatId}`))
-    console.log(chalk.blue(`Query: ${query}`))
-    console.log(chalk.blue(`Files provided: ${files.map(f => f.name).join(", ")}`))
+    // Check if nginx deployment is enabled and subdomain provided
+    if (nginxEnabled && subdomain) {
+      // Deploy to nginx
+      const deployedUrl = await deployToNginx(subdomain, completeFiles, prompt, chatId, sendEvent)
 
-    // Prepare the context for LLaMA
-    const fileContext = files.map(file => {
-      return `// === ${file.name} ===\n${file.content}`
-    }).join("\n\n")
-
-    // Create the prompt for LLaMA
-    const followUpPrompt = `You are an expert game developer assistant. A user has already generated a web game and needs help with the following:
-
-USER QUERY: ${query}
-
-PROJECT ID: ${projectId || 'Not specified'}
-
-CURRENT FILES:
-${fileContext}
-
-Please:
-1. Analyze the issue or requested change
-2. Provide the complete updated code for any files that need modification
-3. Explain what changes were made and why
-4. Suggest any additional improvements if relevant
-
-IMPORTANT: 
-- Return the complete file content, not just snippets
-- Maintain the same code structure and style
-- Ensure all changes are compatible with the existing code
-- For each modified file, use the format: // === filename.js === followed by the complete code
-
-Provide your analysis first, then the updated files.`
-
-    // Call LLaMA via Groq for the follow-up
-    const groqResponse = await llmProvider.groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        {
-          role: "system",
-          content: "You are an expert game developer. Help fix issues and make improvements to web games. Always provide complete file contents when making changes."
+      sendEvent("complete", {
+        chatId,
+        projectId: subdomain,
+        totalFiles: completeFiles.length,
+        aiGeneratedFiles: validationResult.files.length,
+        missingFilesGenerated: validationResult.missingFiles.length,
+        chainUsed: "simple",
+        deploymentType: "nginx",
+        chainSteps: ["Groq - Game explanation and architecture", "Qwen3 - Complete clean code generation"],
+        setupInstructions: {
+          deployedUrl: deployedUrl,
+          subdomain: subdomain,
+          nginxPath: `/var/www/projects/${subdomain}`,
+          generatedPath: `generated/${subdomain}`,
         },
-        {
-          role: "user",
-          content: followUpPrompt
-        }
-      ],
-      temperature: 0.3,
-      max_tokens: 8000,
-    })
-
-    const llmResponse = groqResponse.choices[0].message.content
-
-    // Parse the response to extract analysis and modified files
-    const analysisMatch = llmResponse.match(/^([\s\S]*?)(?=\/\/ ===|$)/);
-    const analysis = analysisMatch ? analysisMatch[1].trim() : "No analysis provided";
-
-    // Extract modified files
-    const modifiedFiles = []
-    const fileSeparatorPattern = /\/\/ === ([\w.-]+) ===([\s\S]*?)(?=\/\/ === |$)/g
-    let match
-
-    while ((match = fileSeparatorPattern.exec(llmResponse)) !== null) {
-      const fileName = match[1].trim()
-      let fileContent = match[2].trim()
-      
-      // Clean up the code
-      fileContent = cleanupGeneratedCode(fileContent, fileName)
-      
-      // Find the original file to compare
-      const originalFile = files.find(f => f.name === fileName)
-      const changes = originalFile 
-        ? "File modified based on the requested changes" 
-        : "New file created"
-
-      modifiedFiles.push({
-        name: fileName,
-        content: fileContent,
-        changes: changes
+        validation: {
+          isComplete: validationResult.isComplete,
+          totalFiles: completeFiles.length,
+          originalFiles: validationResult.files.length,
+          missingFiles: validationResult.missingFiles,
+        },
       })
+
+      console.log(chalk.green(`NGINX deployment completed for Chat ${chatId}!`))
+      console.log(chalk.green(`🌐 Game deployed at: ${deployedUrl}`))
+    } else {
+      // Original localhost behavior
+      sendEvent("progress", {
+        step: 2,
+        totalSteps: 2,
+        stepName: "Project Setup",
+        progress: 95,
+        message: "Saving files and setting up project...",
+      })
+
+      const projectPath = await saveGeneratedFiles(projectId, completeFiles)
+      const serverInfo = await setupAndRunProject(projectPath)
+
+      sendEvent("complete", {
+        chatId,
+        projectId,
+        totalFiles: completeFiles.length,
+        aiGeneratedFiles: validationResult.files.length,
+        missingFilesGenerated: validationResult.missingFiles.length,
+        chainUsed: "simple",
+        deploymentType: "localhost",
+        chainSteps: ["Groq - Game explanation and architecture", "Qwen3 - Complete clean code generation"],
+        setupInstructions: {
+          npmInstall: "npm install",
+          startCommand: "npm start",
+          serveCommand: "npx serve . -p 3000",
+          url: serverInfo.url,
+          liveUrl: serverInfo.url,
+          port: serverInfo.port,
+          projectPath: projectPath,
+        },
+        validation: {
+          isComplete: validationResult.isComplete,
+          totalFiles: completeFiles.length,
+          originalFiles: validationResult.files.length,
+          missingFiles: validationResult.missingFiles,
+        },
+      })
+
+      console.log(chalk.green(`SIMPLE chain completed for Chat ${chatId}!`))
+      console.log(chalk.green(`🎮 Game is running at: ${serverInfo.url}`))
     }
-
-    // Extract suggestions from the analysis
-    const suggestions = []
-    const suggestionMatches = analysis.match(/(?:suggest|recommend|consider|additionally)[\s\S]{0,200}/gi)
-    if (suggestionMatches) {
-      suggestions.push(...suggestionMatches.map(s => s.trim()))
-    }
-
-    // If projectId provided, optionally save the modified files
-    if (projectId && modifiedFiles.length > 0) {
-      const projectPath = path.join(PROJECTS_DIR, projectId)
-      if (await fs.pathExists(projectPath)) {
-        for (const file of modifiedFiles) {
-          const filePath = path.join(projectPath, file.name)
-          await fs.writeFile(filePath, file.content)
-          console.log(chalk.green(`✅ Updated ${file.name} in project ${projectId}`))
-        }
-      }
-    }
-
-    // Send response
-    res.json({
-      success: true,
-      query: query,
-      analysis: analysis,
-      modifiedFiles: modifiedFiles,
-      suggestions: suggestions.length > 0 ? suggestions : ["No additional suggestions"],
-      chatId: chatId,
-      filesAnalyzed: files.length,
-      filesModified: modifiedFiles.length,
-      projectId: projectId || null
-    })
-
-    console.log(chalk.green(`Follow-up request completed for Chat ${chatId}`))
-    console.log(chalk.green(`Modified ${modifiedFiles.length} files`))
-
   } catch (error) {
-    console.error(chalk.red(`Error in follow-up Chat ${chatId}:`, error.message))
-    res.status(500).json({
-      error: "Failed to process follow-up request",
+    console.error(chalk.red(`Error in Simple Chain Chat ${chatId}:`, error.message))
+    sendEvent("error", {
+      error: "Failed to generate web game",
       details: error.message,
       chatId,
     })
   }
+
+  res.end()
 })
 
 // ============================================================================
-// SERVER STARTUP
+// START THE SERVER
 // ============================================================================
 
-function checkEnvironment() {
-  const required = ["GROQ_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]
-  const missing = required.filter((key) => !process.env[key])
-
-  if (missing.length > 0) {
-    console.error(chalk.red("Missing required environment variables:"))
-    missing.forEach((key) => console.error(chalk.red(`   - ${key}`)))
-    process.exit(1)
-  }
-}
-
-process.on("SIGINT", () => {
-  console.log(chalk.yellow("Shutting down Web Game AI Generator Streaming API..."))
-  process.exit(0)
-})
-
-checkEnvironment()
 app.listen(PORT, () => {
-  console.log(chalk.green(`🚀 Web Game AI Generator Streaming API running on http://localhost:${PORT}`))
-  console.log(chalk.blue(`📚 Swagger Documentation: http://localhost:${PORT}/api-docs`))
-  console.log(chalk.blue(`🏥 Health Check: http://localhost:${PORT}/api/health`))
-  console.log(chalk.cyan(`📡 Streaming Endpoints:`))
-  console.log(chalk.cyan(`   POST /api/generate/simple - 2-Step Chain (Groq → Qwen3)`))
-  console.log(chalk.cyan(`   POST /api/generate/full - 4-Step Chain (Groq → Qwen3 → Anthropic → Qwen3)`))
-  console.log(chalk.magenta(`🎯 Features:`))
-  console.log(chalk.magenta(`   ✅ Server-Sent Events streaming`))
-  console.log(chalk.magenta(`   ✅ Real-time progress updates`))
-  console.log(chalk.magenta(`   ✅ Individual file streaming`))
-  console.log(chalk.magenta(`   ✅ Clean code generation (no comments)`))
-  console.log(chalk.magenta(`   ✅ Complete npm project setup`))
-  console.log(chalk.magenta(`   ✅ Auto npm install and server launch`))
-  console.log(chalk.magenta(`   ✅ Live game URL in response`))
+  console.log(chalk.green(`✅ Server is running on http://localhost:${PORT}`))
+  console.log(chalk.blue(`📖 API Docs available at http://localhost:${PORT}/api-docs`))
 })
