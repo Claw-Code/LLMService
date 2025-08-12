@@ -982,34 +982,34 @@ window.Player = Player;`,
 
 // Nginx deployment function
 async function deployToNginx(subdomain, files, prompt, chatId, sendEvent) {
-  const { exec } = await import("child_process")
-  const util = await import("util")
-  const execAsync = util.promisify(exec)
+  const { exec } = await import("child_process");
+  const util = await import("util");
+  const execAsync = util.promisify(exec);
 
   try {
     // Sanitize subdomain
     const sanitizedSubdomain = subdomain
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "")
-      .substring(0, 63)
-    if (!sanitizedSubdomain) throw new Error("Invalid subdomain")
+      .substring(0, 63);
+    if (!sanitizedSubdomain) throw new Error("Invalid subdomain");
 
-    // Create generated project directory - ensure absolute path
+    // Create generated project directory
     const generatedPath = path.isAbsolute(GENERATED_PROJECTS_PATH)
       ? path.join(GENERATED_PROJECTS_PATH, sanitizedSubdomain)
-      : path.join(__dirname, GENERATED_PROJECTS_PATH, sanitizedSubdomain)
-    await fs.ensureDir(generatedPath)
+      : path.join(__dirname, GENERATED_PROJECTS_PATH, sanitizedSubdomain);
+    await fs.ensureDir(generatedPath);
 
-    console.log(chalk.cyan(`📁 Creating project in ${generatedPath}`))
+    console.log(chalk.cyan(`📁 Creating project in ${generatedPath}`));
 
-    // Save all files to generated directory
+    // Save all files
     for (const file of files) {
-      const filePath = path.join(generatedPath, file.name)
-      await fs.writeFile(filePath, file.content)
-      console.log(chalk.green(`✅ Saved ${file.name}`))
+      const filePath = path.join(generatedPath, file.name);
+      await fs.writeFile(filePath, file.content);
+      console.log(chalk.green(`✅ Saved ${file.name}`));
     }
 
-    // Create package.json for build process
+    // Create package.json
     const packageJson = {
       name: `web-game-${sanitizedSubdomain}`,
       version: "1.0.0",
@@ -1017,16 +1017,14 @@ async function deployToNginx(subdomain, files, prompt, chatId, sendEvent) {
       main: "index.html",
       scripts: {
         start: "npx serve . -p 3000",
-        build:
-          "mkdir -p dist && cp -r *.html *.js *.css *.json dist/ 2>/dev/null || cp -r *.html *.js *.css *.json build/ 2>/dev/null || echo 'Static files copied'",
+        build: "mkdir -p dist && cp -r *.html *.js *.css *.json dist/ 2>/dev/null || cp -r *.html *.js *.css *.json build/ 2>/dev/null || echo 'Static files copied'",
         dev: "npx serve . -p 3000",
       },
       keywords: ["game", "html5", "canvas", "ai-generated"],
       author: "AI Generator",
       license: "MIT",
-    }
-
-    await fs.writeFile(path.join(generatedPath, "package.json"), JSON.stringify(packageJson, null, 2))
+    };
+    await fs.writeFile(path.join(generatedPath, "package.json"), JSON.stringify(packageJson, null, 2));
 
     sendEvent("progress", {
       step: 3,
@@ -1034,56 +1032,48 @@ async function deployToNginx(subdomain, files, prompt, chatId, sendEvent) {
       stepName: "Building Project",
       progress: 88,
       message: "Running npm install and build...",
-    })
+    });
 
     // Run npm install
-    console.log(chalk.cyan(`📦 Running npm install in ${generatedPath}`))
+    console.log(chalk.cyan(`📦 Running npm install in ${generatedPath}`));
     try {
-      await execAsync("npm install", { cwd: generatedPath, timeout: 60000 })
+      await execAsync("npm install", { cwd: generatedPath, timeout: 60000 });
     } catch (installError) {
-      console.log(chalk.yellow("npm install had issues, continuing with build..."))
+      console.log(chalk.yellow("npm install had issues, continuing with build..."));
     }
 
     // Run build
-    console.log(chalk.cyan(`🔨 Running build in ${generatedPath}`))
+    console.log(chalk.cyan(`🔨 Running build in ${generatedPath}`));
     try {
-      await execAsync("npm run build", { cwd: generatedPath, timeout: 30000 })
+      await execAsync("npm run build", { cwd: generatedPath, timeout: 30000 });
     } catch (buildError) {
-      console.log(chalk.yellow("Build command had issues, using source files directly..."))
+      console.log(chalk.yellow("Build command had issues, using source files directly..."));
     }
 
     // Determine build output directory
-    const distPath = path.join(generatedPath, "dist")
-    const buildPath = path.join(generatedPath, "build")
-    let buildOutputPath = generatedPath // Default to source files
+    const distPath = path.join(generatedPath, "dist");
+    const buildPath = path.join(generatedPath, "build");
+    let buildOutputPath = generatedPath;
 
     if (await fs.pathExists(distPath)) {
-      buildOutputPath = distPath
-      console.log(chalk.green("✅ Using dist/ output"))
+      buildOutputPath = distPath;
+      console.log(chalk.green("✅ Using dist/ output"));
     } else if (await fs.pathExists(buildPath)) {
-      buildOutputPath = buildPath
-      console.log(chalk.green("✅ Using build/ output"))
+      buildOutputPath = buildPath;
+      console.log(chalk.green("✅ Using build/ output"));
     } else {
-      console.log(chalk.yellow("⚠️  No build output found, using source files"))
+      console.log(chalk.yellow("⚠️ No build output found, using source files"));
     }
 
-    sendEvent("progress", {
-      step: 3,
-      totalSteps: 4,
-      stepName: "Deploying to Nginx",
-      progress: 92,
-      message: "Copying files to nginx directory...",
-    })
-
-    // Create nginx project directory - ensure absolute path
+    // Create nginx project directory
     const nginxPath = path.isAbsolute(NGINX_PROJECTS_PATH)
-      ? path.join(NGINX_PROJECTS_PATH, subdomain)
-      : path.join(__dirname, NGINX_PROJECTS_PATH, subdomain)
-    await fs.ensureDir(nginxPath)
+      ? path.join(NGINX_PROJECTS_PATH, sanitizedSubdomain + ".claw.codes")
+      : path.join(__dirname, NGINX_PROJECTS_PATH, sanitizedSubdomain + ".claw.codes");
+    await fs.ensureDir(nginxPath);
 
     // Copy build output to nginx directory
-    console.log(chalk.cyan(`📋 Copying from ${buildOutputPath} to ${nginxPath}`))
-    await fs.copy(buildOutputPath, nginxPath, { overwrite: true })
+    console.log(chalk.cyan(`📋 Copying from ${buildOutputPath} to ${nginxPath}`));
+    await fs.copy(buildOutputPath, nginxPath, { overwrite: true });
 
     sendEvent("progress", {
       step: 3,
@@ -1091,45 +1081,56 @@ async function deployToNginx(subdomain, files, prompt, chatId, sendEvent) {
       stepName: "Reloading Nginx",
       progress: 96,
       message: "Reloading nginx configuration...",
-    })
+    });
 
-    // Reload nginx
-    console.log(chalk.cyan("🔄 Reloading nginx..."))
+    // Reload nginx with sudo
+    console.log(chalk.cyan("🔄 Reloading nginx..."));
     try {
-      await execAsync("nginx -s reload")
-      console.log(chalk.green("✅ Nginx reloaded successfully"))
+      await execAsync("sudo nginx -t");
+      await execAsync("sudo nginx -s reload");
+      console.log(chalk.green("✅ Nginx reloaded successfully"));
     } catch (nginxError) {
-      console.log(chalk.yellow("⚠️  Nginx reload had issues:", nginxError.message))
+      console.log(chalk.yellow("⚠️ Nginx reload had issues:", nginxError.message));
+      sendEvent("error", {
+        error: "Nginx reload failed",
+        details: nginxError.message,
+        chatId,
+      });
     }
 
-    // Log deployment - ensure absolute path
-    const deployLogPath = path.isAbsolute(DEPLOY_LOG_PATH) ? DEPLOY_LOG_PATH : path.join(__dirname, DEPLOY_LOG_PATH)
-
-    const deployTime = new Date().toISOString()
-    const logEntry = `${deployTime} - Deployed ${subdomain} (Chat ${chatId}) - ${prompt.slice(0, 100)}\n`
-
+    // Log deployment
+    const deployLogPath = path.isAbsolute(DEPLOY_LOG_PATH) ? DEPLOY_LOG_PATH : path.join(__dirname, DEPLOY_LOG_PATH);
+    const deployTime = new Date().toISOString();
+    const logEntry = `${deployTime} - Deployed ${sanitizedSubdomain}.claw.codes (Chat ${chatId}) - ${prompt.slice(0, 100)}\n`;
     try {
-      await fs.appendFile(deployLogPath, logEntry)
+      await fs.appendFile(deployLogPath, logEntry);
     } catch (logError) {
-      console.log(chalk.yellow("⚠️  Could not write to deploy log:", logError.message))
+      console.log(chalk.yellow("⚠️ Could not write to deploy log:", logError.message));
     }
 
-    // Update environment variable with deployed URL
-    const deployedUrl = `https://${subdomain}.claw.codes`
+    // Update DEPLOYED_URLS with both HTTP and HTTPS
+    const httpUrl = `http://${sanitizedSubdomain}.claw.codes`;
+    const httpsUrl = `https://${sanitizedSubdomain}.claw.codes`;
     try {
-      const currentUrls = process.env.DEPLOYED_URLS || "http://localhost:3005"
-      const updatedUrls = currentUrls.includes(deployedUrl) ? currentUrls : `${currentUrls},${deployedUrl}`
-      process.env.DEPLOYED_URLS = updatedUrls
-      console.log(chalk.green(`✅ Updated DEPLOYED_URLS: ${updatedUrls}`))
+      const currentUrls = process.env.DEPLOYED_URLS || "";
+      const newUrls = [httpUrl, httpsUrl].filter(url => !currentUrls.includes(url));
+      const updatedUrls = [...newUrls, ...currentUrls.split(",").filter(Boolean)].join(",");
+      process.env.DEPLOYED_URLS = updatedUrls;
+      console.log(chalk.green(`✅ Updated DEPLOYED_URLS: ${updatedUrls}`));
     } catch (envError) {
-      console.log(chalk.yellow("⚠️  Could not update DEPLOYED_URLS:", envError.message))
+      console.log(chalk.yellow("⚠️ Could not update DEPLOYED_URLS:", envError.message));
     }
 
-    console.log(chalk.green(`🚀 Successfully deployed to ${deployedUrl}`))
-    return deployedUrl
+    console.log(chalk.green(`🚀 Successfully deployed to ${httpsUrl} and ${httpUrl}`));
+    return { httpUrl, httpsUrl };
   } catch (error) {
-    console.error(chalk.red(`❌ Nginx deployment failed:`, error.message))
-    throw new Error(`Deployment failed: ${error.message}`)
+    console.error(chalk.red(`❌ Nginx deployment failed:`, error.message));
+    sendEvent("error", {
+      error: "Deployment failed",
+      details: error.message,
+      chatId,
+    });
+    throw new Error(`Deployment failed: ${error.message}`);
   }
 }
 
