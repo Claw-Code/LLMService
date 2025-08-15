@@ -120,7 +120,6 @@
   body {
     @apply bg-background text-foreground;
   }
-
   canvas {
     display: block;
     margin: 0 auto;

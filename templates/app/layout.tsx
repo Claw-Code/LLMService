@@ -4,8 +4,8 @@ import { GeistSans } from "geist/font/sans"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Flappy Bird Game",
-  description: "A fun Flappy Bird game built with Next.js",
+  title: "My Project",
+  description: "A fun game built with Next.js",
 }
 
 export default function RootLayout({
