@@ -24,6 +24,7 @@ const GENERATED_PROJECTS_PATH = process.env.GENERATED_PROJECTS_PATH || "generate
 const NGINX_PROJECTS_PATH = process.env.NGINX_PROJECTS_PATH || "nginx-projects"
 const DEPLOY_LOG_PATH = process.env.DEPLOY_LOG_PATH || "deploy-log.txt"
 const TEMPLATES_DIR = path.join(__dirname, "templates")
+const RESPONSE_LOG_DIR = path.join(__dirname, "response-logs")
 
 app.use(cors())
 app.use(express.json())
@@ -35,12 +36,93 @@ const CHAT_HISTORY_DIR = "chat-history"
 await fs.ensureDir(PROJECTS_DIR)
 await fs.ensureDir(CHAT_HISTORY_DIR)
 await fs.ensureDir(TEMPLATES_DIR)
+await fs.ensureDir(RESPONSE_LOG_DIR)
 
 let chatCounter = 1
 const conversationContexts = new Map()
 
 // Initialize traced LLM provider
 const llmProvider = new TracedLLMProvider()
+
+// ============================================================================
+// RESPONSE LOGGING FUNCTIONS
+// ============================================================================
+
+async function logLLMResponse(chatId, step, provider, prompt, response, metadata = {}) {
+  try {
+    const timestamp = new Date().toISOString()
+    const logEntry = {
+      chatId,
+      step,
+      provider,
+      timestamp,
+      prompt: prompt.slice(0, 1000) + (prompt.length > 1000 ? "..." : ""),
+      response,
+      responseLength: response.length,
+      metadata,
+    }
+
+    const logFileName = `chat-${chatId}-${step}-${provider}-${timestamp.replace(/[:.]/g, "-")}.json`
+    const logPath = path.join(RESPONSE_LOG_DIR, logFileName)
+
+    await fs.writeFile(logPath, JSON.stringify(logEntry, null, 2))
+    console.log(chalk.blue(`📝 Logged ${provider} response to ${logFileName}`))
+  } catch (error) {
+    console.error(chalk.red(`Failed to log LLM response:`, error.message))
+  }
+}
+
+async function logCompleteChain(chatId, chainData) {
+  try {
+    const timestamp = new Date().toISOString()
+    const logEntry = {
+      chatId,
+      timestamp,
+      chainType: chainData.chainUsed || "unknown",
+      ...chainData,
+    }
+
+    const logFileName = `complete-chain-${chatId}-${timestamp.replace(/[:.]/g, "-")}.json`
+    const logPath = path.join(RESPONSE_LOG_DIR, logFileName)
+
+    await fs.writeFile(logPath, JSON.stringify(logEntry, null, 2))
+    console.log(chalk.green(`📋 Logged complete chain to ${logFileName}`))
+  } catch (error) {
+    console.error(chalk.red(`Failed to log complete chain:`, error.message))
+  }
+}
+
+// ============================================================================
+// SVG EXTRACTION AND PROCESSING
+// ============================================================================
+
+function extractSVGAssets(generatedCode) {
+  const svgFiles = []
+  const svgPattern = /\/\/ === public\/assets\/([^=]+\.svg) ===([\s\S]*?)(?=\/\/ === |$)/g
+
+  let match
+  while ((match = svgPattern.exec(generatedCode)) !== null) {
+    const fileName = match[1].trim()
+    let svgContent = match[2].trim()
+
+    // Clean up SVG content
+    svgContent = svgContent.replace(/```svg\s*/g, "")
+    svgContent = svgContent.replace(/```\s*/g, "")
+    svgContent = svgContent.trim()
+
+    if (svgContent && svgContent.includes("<svg")) {
+      svgFiles.push({
+        name: `public/assets/${fileName}`,
+        content: svgContent,
+        type: "svg",
+        source: "llm-generated",
+      })
+      console.log(chalk.green(`✅ Extracted SVG asset: ${fileName}`))
+    }
+  }
+
+  return svgFiles
+}
 
 // ============================================================================
 // TEMPLATE LOADING FUNCTIONS
@@ -50,9 +132,18 @@ const llmProvider = new TracedLLMProvider()
 async function loadTemplate(templateName) {
   try {
     const templatePath = path.join(TEMPLATES_DIR, templateName)
-    return await fs.readFile(templatePath, "utf8")
+    const exists = await fs.pathExists(templatePath)
+
+    if (!exists) {
+      console.warn(chalk.yellow(`⚠️  Template ${templateName} not found at ${templatePath}`))
+      return null
+    }
+
+    const content = await fs.readFile(templatePath, "utf8")
+    console.log(chalk.green(`✅ Loaded template ${templateName} (${content.length} chars)`))
+    return content
   } catch (error) {
-    console.warn(chalk.yellow(`⚠️  Template ${templateName} not found, using fallback`))
+    console.warn(chalk.yellow(`⚠️  Failed to load template ${templateName}:`, error.message))
     return null
   }
 }
@@ -61,86 +152,70 @@ async function loadTemplate(templateName) {
 async function generateConfigFiles(gameName, gameType) {
   const configFiles = []
 
-  // Load templates
-  const nextConfigTemplate = await loadTemplate("next-config.js")
-  const tailwindConfigTemplate = await loadTemplate("tailwind-config.ts")
-  const tsconfigTemplate = await loadTemplate("tsconfig.json")
-  const componentsConfigTemplate = await loadTemplate("components.json")
-  const postcssConfigTemplate = await loadTemplate("postcss-config.js")
-  const gitignoreTemplate = await loadTemplate("gitignore.txt")
-  const readmeTemplate = await loadTemplate("readme.md")
-
-  // Add next.config.mjs
-  if (nextConfigTemplate) {
-    configFiles.push({
-      name: "next.config.mjs",
-      content: nextConfigTemplate,
-      type: "js",
-    })
+  // Load templates with proper error handling
+  const templates = {
+    "next.config.mjs": await loadTemplate("next-config.js"),
+    "tailwind.config.ts": await loadTemplate("tailwind-config.ts"),
+    "tsconfig.json": await loadTemplate("tsconfig.json"),
+    "components.json": await loadTemplate("components.json"),
+    "postcss.config.mjs": await loadTemplate("postcss-config.js"),
+    ".gitignore": await loadTemplate("gitignore.txt"),
+    "README.md": await loadTemplate("readme.md"),
   }
 
-  // Add tailwind.config.ts
-  if (tailwindConfigTemplate) {
-    configFiles.push({
-      name: "tailwind.config.ts",
-      content: tailwindConfigTemplate,
-      type: "ts",
-    })
-  }
+  // Process each template
+  Object.entries(templates).forEach(([fileName, content]) => {
+    if (content) {
+      let processedContent = content
 
-  // Add tsconfig.json
-  if (tsconfigTemplate) {
-    configFiles.push({
-      name: "tsconfig.json",
-      content: tsconfigTemplate,
-      type: "json",
-    })
-  }
+      // Process README.md with replacements
+      if (fileName === "README.md") {
+        const gameDisplayName = gameName.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+        const gameEngine = gameType === "babylon" ? "Babylon.js" : "Phaser"
 
-  // Add components.json
-  if (componentsConfigTemplate) {
-    configFiles.push({
-      name: "components.json",
-      content: componentsConfigTemplate,
-      type: "json",
-    })
-  }
+        processedContent = content.replace(/\{GAME_NAME\}/g, gameDisplayName).replace(/\{GAME_ENGINE\}/g, gameEngine)
+      }
 
-  // Add postcss.config.mjs
-  if (postcssConfigTemplate) {
-    configFiles.push({
-      name: "postcss.config.mjs",
-      content: postcssConfigTemplate,
-      type: "js",
-    })
-  }
+      configFiles.push({
+        name: fileName,
+        content: processedContent,
+        type: fileName.split(".").pop() || "txt",
+        source: "template",
+      })
 
-  // Add .gitignore
-  if (gitignoreTemplate) {
-    configFiles.push({
-      name: ".gitignore",
-      content: gitignoreTemplate,
-      type: "txt",
-    })
-  }
-
-  // Add README.md with replacements
-  if (readmeTemplate) {
-    const gameDisplayName = gameName.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-    const gameEngine = gameType === "babylon" ? "Babylon.js" : "Phaser"
-
-    const readmeContent = readmeTemplate
-      .replace(/\{GAME_NAME\}/g, gameDisplayName)
-      .replace(/\{GAME_ENGINE\}/g, gameEngine)
-
-    configFiles.push({
-      name: "README.md",
-      content: readmeContent,
-      type: "md",
-    })
-  }
+      console.log(chalk.green(`✅ Added config file ${fileName} from template`))
+    } else {
+      console.warn(chalk.yellow(`⚠️  Skipping ${fileName} - template not found`))
+    }
+  })
 
   return configFiles
+}
+
+// Load all game component templates
+async function loadGameComponentTemplates() {
+  const templates = {}
+
+  const templateFiles = [
+    "components/game.tsx",
+    "components/game/game-engine.tsx",
+    "components/game/game-logic.tsx",
+    "components/game/game-ui.tsx",
+    "components/game/game-controls.tsx",
+    "types/game.ts",
+  ]
+
+  for (const templateFile of templateFiles) {
+    const content = await loadTemplate(templateFile)
+    if (content) {
+      templates[templateFile] = content
+      console.log(chalk.green(`✅ Loaded game template ${templateFile}`))
+    } else {
+      console.warn(chalk.yellow(`⚠️  Missing game template ${templateFile}`))
+    }
+  }
+
+  return templates
 }
 
 // ============================================================================
@@ -371,103 +446,53 @@ function validateAndParseNextJSFiles(generatedCode, chatId, gameType = "phaser")
   const files = []
   const missingFiles = []
 
-  const requiredFiles =
-    gameType === "babylon"
-      ? [
-          "package.json",
-          "app/layout.tsx",
-          "app/page.tsx",
-          "app/globals.css",
-          "components/game.tsx",
-          "lib/babylon-engine.ts",
-          "lib/game-manager.ts",
-          "lib/input-manager.ts",
-          "lib/audio-manager.ts",
-          "lib/utils.ts",
-          "types/game.ts",
-        ]
-      : [
-          "package.json",
-          "app/layout.tsx",
-          "app/page.tsx",
-          "app/globals.css",
-          "components/game.tsx",
-          "lib/phaser-config.ts",
-          "lib/scenes/main-scene.ts",
-          "lib/game-objects/player.ts",
-          "lib/managers/audio-manager.ts",
-          "lib/utils.ts",
-          "types/game.ts",
-        ]
+  const requiredFiles = [
+    "package.json",
+    "app/layout.tsx",
+    "app/page.tsx",
+    "app/globals.css",
+    "components/game.tsx",
+    "components/game/game-engine.tsx",
+    "components/game/game-logic.tsx",
+    "components/game/game-ui.tsx",
+    "components/game/game-controls.tsx",
+    "types/game.ts",
+    "lib/utils.ts",
+  ]
 
-  const fileSeparators =
-    gameType === "babylon"
-      ? [
-          { pattern: /\/\/ === package\.json ===([\s\S]*?)(?=\/\/ === |$)/g, name: "package.json", type: "json" },
-          { pattern: /\/\/ === app\/layout\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/layout.tsx", type: "tsx" },
-          { pattern: /\/\/ === app\/page\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/page.tsx", type: "tsx" },
-          { pattern: /\/\/ === app\/globals\.css ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/globals.css", type: "css" },
-          {
-            pattern: /\/\/ === components\/game\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "components/game.tsx",
-            type: "tsx",
-          },
-          {
-            pattern: /\/\/ === lib\/babylon-engine\.ts ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "lib/babylon-engine.ts",
-            type: "ts",
-          },
-          {
-            pattern: /\/\/ === lib\/game-manager\.ts ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "lib/game-manager.ts",
-            type: "ts",
-          },
-          {
-            pattern: /\/\/ === lib\/input-manager\.ts ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "lib/input-manager.ts",
-            type: "ts",
-          },
-          {
-            pattern: /\/\/ === lib\/audio-manager\.ts ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "lib/audio-manager.ts",
-            type: "ts",
-          },
-          { pattern: /\/\/ === lib\/utils\.ts ===([\s\S]*?)(?=\/\/ === |$)/g, name: "lib/utils.ts", type: "ts" },
-          { pattern: /\/\/ === types\/game\.ts ===([\s\S]*?)(?=\/\/ === |$)/g, name: "types/game.ts", type: "ts" },
-        ]
-      : [
-          { pattern: /\/\/ === package\.json ===([\s\S]*?)(?=\/\/ === |$)/g, name: "package.json", type: "json" },
-          { pattern: /\/\/ === app\/layout\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/layout.tsx", type: "tsx" },
-          { pattern: /\/\/ === app\/page\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/page.tsx", type: "tsx" },
-          { pattern: /\/\/ === app\/globals\.css ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/globals.css", type: "css" },
-          {
-            pattern: /\/\/ === components\/game\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "components/game.tsx",
-            type: "tsx",
-          },
-          {
-            pattern: /\/\/ === lib\/phaser-config\.ts ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "lib/phaser-config.ts",
-            type: "ts",
-          },
-          {
-            pattern: /\/\/ === lib\/scenes\/main-scene\.ts ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "lib/scenes/main-scene.ts",
-            type: "ts",
-          },
-          {
-            pattern: /\/\/ === lib\/game-objects\/player\.ts ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "lib/game-objects/player.ts",
-            type: "ts",
-          },
-          {
-            pattern: /\/\/ === lib\/managers\/audio-manager\.ts ===([\s\S]*?)(?=\/\/ === |$)/g,
-            name: "lib/managers/audio-manager.ts",
-            type: "ts",
-          },
-          { pattern: /\/\/ === lib\/utils\.ts ===([\s\S]*?)(?=\/\/ === |$)/g, name: "lib/utils.ts", type: "ts" },
-          { pattern: /\/\/ === types\/game\.ts ===([\s\S]*?)(?=\/\/ === |$)/g, name: "types/game.ts", type: "ts" },
-        ]
+  const fileSeparators = [
+    { pattern: /\/\/ === package\.json ===([\s\S]*?)(?=\/\/ === |$)/g, name: "package.json", type: "json" },
+    { pattern: /\/\/ === app\/layout\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/layout.tsx", type: "tsx" },
+    { pattern: /\/\/ === app\/page\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/page.tsx", type: "tsx" },
+    { pattern: /\/\/ === app\/globals\.css ===([\s\S]*?)(?=\/\/ === |$)/g, name: "app/globals.css", type: "css" },
+    {
+      pattern: /\/\/ === components\/game\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g,
+      name: "components/game.tsx",
+      type: "tsx",
+    },
+    {
+      pattern: /\/\/ === components\/game\/game-engine\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g,
+      name: "components/game/game-engine.tsx",
+      type: "tsx",
+    },
+    {
+      pattern: /\/\/ === components\/game\/game-logic\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g,
+      name: "components/game/game-logic.tsx",
+      type: "tsx",
+    },
+    {
+      pattern: /\/\/ === components\/game\/game-ui\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g,
+      name: "components/game/game-ui.tsx",
+      type: "tsx",
+    },
+    {
+      pattern: /\/\/ === components\/game\/game-controls\.tsx ===([\s\S]*?)(?=\/\/ === |$)/g,
+      name: "components/game/game-controls.tsx",
+      type: "tsx",
+    },
+    { pattern: /\/\/ === types\/game\.ts ===([\s\S]*?)(?=\/\/ === |$)/g, name: "types/game.ts", type: "ts" },
+    { pattern: /\/\/ === lib\/utils\.ts ===([\s\S]*?)(?=\/\/ === |$)/g, name: "lib/utils.ts", type: "ts" },
+  ]
 
   // Parse files using separators
   fileSeparators.forEach(({ pattern, name, type }) => {
@@ -484,6 +509,10 @@ function validateAndParseNextJSFiles(generatedCode, chatId, gameType = "phaser")
     }
   })
 
+  // Extract SVG assets
+  const svgAssets = extractSVGAssets(generatedCode)
+  files.push(...svgAssets)
+
   // Check for missing required files (remove duplicates)
   const uniqueMissingFiles = [...new Set(missingFiles)]
   requiredFiles.forEach((fileName) => {
@@ -498,10 +527,12 @@ function validateAndParseNextJSFiles(generatedCode, chatId, gameType = "phaser")
     isComplete: uniqueMissingFiles.length === 0,
     totalFiles: files.length,
     requiredFiles: requiredFiles.length,
+    svgAssets: svgAssets.length,
     gameType,
   }
 
   console.log(chalk.green(`Parsed and cleaned ${files.length}/${requiredFiles.length} ${gameType} files`))
+  console.log(chalk.green(`Extracted ${svgAssets.length} SVG assets`))
   if (uniqueMissingFiles.length > 0) {
     console.log(chalk.red(`Missing files: ${uniqueMissingFiles.join(", ")}`))
   }
@@ -513,7 +544,11 @@ function validateAndParseNextJSFiles(generatedCode, chatId, gameType = "phaser")
 function cleanupGeneratedCode(content, fileName) {
   // Remove markdown code blocks
   content = content.replace(/```javascript\s*/g, "")
+  content = content.replace(/```typescript\s*/g, "")
+  content = content.replace(/```tsx\s*/g, "")
   content = content.replace(/```html\s*/g, "")
+  content = content.replace(/```css\s*/g, "")
+  content = content.replace(/```json\s*/g, "")
   content = content.replace(/```\s*/g, "")
 
   // Remove generation comments
@@ -532,9 +567,7 @@ function cleanupGeneratedCode(content, fileName) {
   return content
 }
 
-// Update the createCompleteNextJSStructure function to use the new modular structure
-
-// Create complete file structure with templates
+// Create complete file structure with templates - PRIORITIZE TEMPLATES OVER LLM GENERATION
 async function createCompleteNextJSStructure(existingFiles, missingFiles, gamePrompt, gameType = "phaser") {
   const completeFiles = [...existingFiles]
   const gameName =
@@ -544,18 +577,16 @@ async function createCompleteNextJSStructure(existingFiles, missingFiles, gamePr
       .replace(/-+/g, "-")
       .trim() || "game"
 
-  // Add configuration files from templates
+  console.log(chalk.cyan(`🏗️  Building complete Next.js structure for ${gameName}...`))
+
+  // Add configuration files from templates FIRST
   const configFiles = await generateConfigFiles(gameName, gameType)
   completeFiles.push(...configFiles)
 
-  // Load component templates
-  const gameTemplate = await loadTemplate("components/game.tsx")
-  const gameEngineTemplate = await loadTemplate("components/game/game-engine.tsx")
-  const gameLogicTemplate = await loadTemplate("components/game/game-logic.tsx")
-  const gameUITemplate = await loadTemplate("components/game/game-ui.tsx")
-  const gameControlsTemplate = await loadTemplate("components/game/game-controls.tsx")
-  const gameTypesTemplate = await loadTemplate("types/game.ts")
+  // Load all game component templates
+  const gameTemplates = await loadGameComponentTemplates()
 
+  // Base templates for essential files
   const baseTemplates = {
     "package.json": JSON.stringify(
       {
@@ -755,32 +786,40 @@ export const gameUtils = {
     return \`\${mins}:\${secs.toString().padStart(2, '0')}\`;
   }
 };`,
-
-    // Add modular component templates
-    "components/game.tsx": gameTemplate || `// Fallback game component`,
-    "components/game/game-engine.tsx": gameEngineTemplate || `// Fallback game engine`,
-    "components/game/game-logic.tsx": gameLogicTemplate || `// Fallback game logic`,
-    "components/game/game-ui.tsx": gameUITemplate || `// Fallback game UI`,
-    "components/game/game-controls.tsx": gameControlsTemplate || `// Fallback game controls`,
-    "types/game.ts": gameTypesTemplate || `// Fallback game types`,
   }
 
-  // Add missing files using templates
+  // Add missing files - PRIORITIZE TEMPLATES OVER BASE TEMPLATES
   missingFiles.forEach((fileName) => {
-    if (baseTemplates[fileName]) {
+    // Check if we have a template for this file first
+    if (gameTemplates[fileName]) {
+      completeFiles.push({
+        name: fileName,
+        content: gameTemplates[fileName],
+        type: fileName.split(".").pop() || "txt",
+        source: "template",
+      })
+      console.log(chalk.green(`✅ Added ${fileName} from template`))
+    } else if (baseTemplates[fileName]) {
       completeFiles.push({
         name: fileName,
         content: baseTemplates[fileName],
         type: fileName.split(".").pop() || "txt",
+        source: "base-template",
       })
-      console.log(chalk.yellow(`🔧 Auto-generated ${fileName}`))
+      console.log(chalk.yellow(`🔧 Added ${fileName} from base template`))
+    } else {
+      console.warn(chalk.red(`❌ No template found for ${fileName} - will need LLM generation`))
     }
   })
 
+  console.log(chalk.green(`✅ Complete structure built with ${completeFiles.length} files`))
   return completeFiles
 }
 
-// API Routes remain the same...
+// ============================================================================
+// ENHANCED API ROUTES WITH LOGGING AND SVG EXTRACTION
+// ============================================================================
+
 app.post("/api/generate/full", async (req, res) => {
   const chatId = chatCounter++
 
@@ -820,33 +859,45 @@ app.post("/api/generate/full", async (req, res) => {
       message: "Starting full AI chain (Groq → Qwen3 → Anthropic → Qwen3)...",
     })
 
+    // Step 1: Groq explanation
     const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId)
+    await logLLMResponse(chatId, "explanation", "groq", prompt, groqExplanation)
+
     sendEvent("step_complete", {
       step: 1,
       stepName: "Groq Architecture",
       output: `Game architecture explanation completed (${groqExplanation.length} characters)`,
     })
 
+    // Step 2: Qwen3 initial code
     const qwenInitialCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId)
+    await logLLMResponse(chatId, "initial-code", "qwen3", groqExplanation, qwenInitialCode)
+
     sendEvent("step_complete", {
       step: 2,
       stepName: "Qwen3 Initial Code",
       output: `Initial code generation completed (${qwenInitialCode.length} characters)`,
     })
 
+    // Step 3: Anthropic validation
     const anthropicFeedback = await llmProvider.validateWithAnthropic(qwenInitialCode, prompt, chatId)
+    await logLLMResponse(chatId, "validation", "anthropic", qwenInitialCode, anthropicFeedback)
+
     sendEvent("step_complete", {
       step: 3,
       stepName: "Anthropic Validation",
       output: `Code validation completed with detailed feedback (${anthropicFeedback.length} characters)`,
     })
 
+    // Step 4: Qwen3 final code
     const qwenFinalCode = await llmProvider.generateFinalCodeWithQwen(
       anthropicFeedback,
       qwenInitialCode,
       prompt,
       chatId,
     )
+    await logLLMResponse(chatId, "final-code", "qwen3", anthropicFeedback, qwenFinalCode)
+
     sendEvent("step_complete", {
       step: 4,
       stepName: "Qwen3 Final Fixes",
@@ -868,6 +919,7 @@ app.post("/api/generate/full", async (req, res) => {
         fileType: file.type,
         content: file.content,
         size: file.content.length,
+        source: file.source || "llm",
         index: index + 1,
         totalFiles: completeFiles.length,
       })
@@ -877,12 +929,13 @@ app.post("/api/generate/full", async (req, res) => {
     const projectPath = await saveGeneratedFiles(projectId, completeFiles)
     const serverInfo = await setupAndRunProject(projectPath)
 
-    sendEvent("complete", {
+    const completeChainData = {
       chatId,
       projectId,
       totalFiles: completeFiles.length,
       aiGeneratedFiles: validationResult.files.length,
       missingFilesGenerated: validationResult.missingFiles.length,
+      svgAssetsGenerated: validationResult.svgAssets,
       chainUsed: "full",
       chainSteps: [
         "Groq - Game explanation and architecture",
@@ -905,11 +958,23 @@ app.post("/api/generate/full", async (req, res) => {
         totalFiles: completeFiles.length,
         originalFiles: validationResult.files.length,
         missingFiles: validationResult.missingFiles,
+        svgAssets: validationResult.svgAssets,
       },
-    })
+      responses: {
+        groqExplanation: groqExplanation.length,
+        qwenInitialCode: qwenInitialCode.length,
+        anthropicFeedback: anthropicFeedback.length,
+        qwenFinalCode: qwenFinalCode.length,
+      },
+    }
+
+    await logCompleteChain(chatId, completeChainData)
+
+    sendEvent("complete", completeChainData)
 
     console.log(chalk.green(`FULL chain completed for Chat ${chatId}!`))
     console.log(chalk.green(`🎮 Game is running at: ${serverInfo.url}`))
+    console.log(chalk.green(`🎨 Generated ${validationResult.svgAssets} SVG assets`))
   } catch (error) {
     console.error(chalk.red(`Error in Full Chain Chat ${chatId}:`, error.message))
     sendEvent("error", {
@@ -955,7 +1020,10 @@ app.post("/api/generate/simple", async (req, res) => {
     console.log(chalk.blue(`Game Request: ${prompt}`))
 
     const groqExplanation = await llmProvider.getGameExplanation(prompt, chatId)
+    await logLLMResponse(chatId, "explanation", "groq", prompt, groqExplanation)
+
     const qwenFinalCode = await llmProvider.generateCleanCodeWithQwen(groqExplanation, prompt, chatId)
+    await logLLMResponse(chatId, "final-code", "qwen3", groqExplanation, qwenFinalCode)
 
     const gameType = subdomain && subdomain.includes("babylon") ? "babylon" : "phaser"
     const validationResult = validateAndParseNextJSFiles(qwenFinalCode, chatId, gameType)
@@ -972,6 +1040,7 @@ app.post("/api/generate/simple", async (req, res) => {
         fileType: file.type,
         content: file.content,
         size: file.content.length,
+        source: file.source || "llm",
         index: index + 1,
         totalFiles: completeFiles.length,
       })
@@ -981,18 +1050,22 @@ app.post("/api/generate/simple", async (req, res) => {
 
     if (nginxEnabled && subdomain) {
       // Deploy to nginx (implementation would go here)
-      sendEvent("complete", {
+      const simpleChainData = {
         chatId,
         projectId: subdomain,
         totalFiles: completeFiles.length,
         chainUsed: "simple",
         deploymentType: "nginx",
-      })
+        svgAssetsGenerated: validationResult.svgAssets,
+      }
+
+      await logCompleteChain(chatId, simpleChainData)
+      sendEvent("complete", simpleChainData)
     } else {
       const projectPath = await saveGeneratedFiles(projectId, completeFiles)
       const serverInfo = await setupAndRunProject(projectPath)
 
-      sendEvent("complete", {
+      const simpleChainData = {
         chatId,
         projectId,
         totalFiles: completeFiles.length,
@@ -1005,10 +1078,21 @@ app.post("/api/generate/simple", async (req, res) => {
           port: serverInfo.port,
           projectPath: projectPath,
         },
-      })
+        responses: {
+          groqExplanation: groqExplanation.length,
+          qwenFinalCode: qwenFinalCode.length,
+        },
+        validation: {
+          svgAssets: validationResult.svgAssets,
+        },
+      }
+
+      await logCompleteChain(chatId, simpleChainData)
+      sendEvent("complete", simpleChainData)
 
       console.log(chalk.green(`SIMPLE chain completed for Chat ${chatId}!`))
       console.log(chalk.green(`🎮 Game is running at: ${serverInfo.url}`))
+      console.log(chalk.green(`🎨 Generated ${validationResult.svgAssets} SVG assets`))
     }
   } catch (error) {
     console.error(chalk.red(`Error in Simple Chain Chat ${chatId}:`, error.message))
@@ -1030,4 +1114,5 @@ app.listen(PORT, () => {
   console.log(chalk.green(`✅ Server is running on http://localhost:${PORT}`))
   console.log(chalk.blue(`📖 API Docs available at http://localhost:${PORT}/api-docs`))
   console.log(chalk.cyan(`📁 Templates directory: ${TEMPLATES_DIR}`))
+  console.log(chalk.cyan(`📋 Response logs directory: ${RESPONSE_LOG_DIR}`))
 })
