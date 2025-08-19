@@ -1,0 +1,13 @@
+// === src/App.tsx ===
+import React from "react";
+import GameComponent from "./components/GameComponent";
+
+const App: React.FC = () => {
+  return (
+    <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }}>
+      <GameComponent />
+    </div>
+  );
+};
+
+export default App;

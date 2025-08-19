@@ -1,0 +1,87 @@
+{
+  "name": "React Game Project Template",
+  "version": "1.0.0",
+  "description": "JSON schema for validating React game project structure",
+  "structure": {
+    "required_files": [
+      "index.html",
+      "package.json",
+      "vite.config.ts",
+      "src/main.tsx",
+      "src/App.tsx",
+      "src/App.css",
+      "src/index.css"
+    ],
+    "optional_files": [
+      "src/components/GameComponent.tsx",
+      "src/components/PhaserGame.tsx",
+      "src/components/BabylonGame.tsx",
+      "README.md",
+      ".gitignore"
+    ],
+    "forbidden_files": [
+      "app/page.tsx",
+      "app/layout.tsx",
+      "components/ui/button.tsx",
+      "components/ui/card.tsx",
+      "lib/utils.ts",
+      "next.config.js",
+      "tailwind.config.js"
+    ],
+    "directories": {
+      "src": {
+        "required": true,
+        "subdirectories": {
+          "components": {
+            "required": false,
+            "max_files": 3
+          }
+        }
+      },
+      "public": {
+        "required": false
+      }
+    },
+    "file_patterns": {
+      "index.html": {
+        "must_contain": ["<div id=\"root\">", "Vite", "React"],
+        "placeholders": ["{GAME_NAME}"],
+        "forbidden_content": ["```tsx", "```html", "==="]
+      },
+      "package.json": {
+        "must_contain": ["react", "vite", "@vitejs/plugin-react"],
+        "scripts": ["dev", "build", "preview"],
+        "forbidden_content": ["next", "```json"]
+      },
+      "src/main.tsx": {
+        "must_contain": ["React.StrictMode", "createRoot", "App"],
+        "forbidden_content": ["```tsx", "===", "app/"]
+      },
+      "src/App.tsx": {
+        "must_contain": ["export default App", "useState", "React"],
+        "game_engines": ["phaser", "babylon"],
+        "forbidden_content": ["```tsx", "===", "app/page.tsx"]
+      }
+    },
+    "validation_rules": {
+      "max_total_files": 15,
+      "max_component_files": 3,
+      "required_dependencies": ["react", "react-dom", "vite"],
+      "game_engine_exclusive": true,
+      "no_markdown_artifacts": true,
+      "no_file_separators": true
+    }
+  },
+  "environments": {
+    "development": {
+      "server_command": "npm run dev",
+      "port_range": [3000, 3999],
+      "host": "0.0.0.0"
+    },
+    "nginx": {
+      "build_command": "npm run build",
+      "serve_directory": "dist",
+      "config_template": "nginx.conf.template"
+    }
+  }
+}
