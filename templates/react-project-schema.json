@@ -10,10 +10,11 @@
       "src/main.tsx",
       "src/App.tsx",
       "src/App.css",
-      "src/index.css"
+      "src/index.css",
+      "src/components/GameComponent.tsx"
     ],
     "optional_files": [
-      "src/components/GameComponent.tsx",
+    
       "src/components/PhaserGame.tsx",
       "src/components/BabylonGame.tsx",
       "README.md",
@@ -61,6 +62,26 @@
         "must_contain": ["export default App", "useState", "React"],
         "game_engines": ["phaser", "babylon"],
         "forbidden_content": ["```tsx", "===", "app/page.tsx"]
+      },
+      "src/components/GameComponent.tsx": {
+        "must_contain": ["export default", "React", "useEffect", "useRef"],
+        "game_engines": ["phaser", "babylon"],
+        "min_lines": 100,
+        "max_lines": 2000,
+        "forbidden_content": ["```tsx", "===", "app/", "next/", "markdown"],
+        "required_patterns": [
+          "const.*Game.*Component",
+          "export default.*Game.*Component",
+          "(Phaser|Babylon)",
+          "useEffect\\s*\\(",
+          "canvas|scene|game"
+        ],
+        "validation_rules": {
+          "must_be_single_component": true,
+          "must_handle_cleanup": true,
+          "must_be_responsive": true,
+          "no_external_dependencies_in_component": false
+        }
       }
     },
     "validation_rules": {
