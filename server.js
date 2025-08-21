@@ -365,7 +365,7 @@ await fs.appendFile(DEPLOY_LOG_PATH, logEntry);
     } catch (logError) {
 console.log(chalk.yellow("⚠️ Could not write to deploy log:", logError.message));
     }
-const httpUrl = `http://${sanitizedSubdomain}.claw.codes`;
+const httpUrl = `https://${sanitizedSubdomain}.claw.codes`;
 const httpsUrl = `https://${sanitizedSubdomain}.claw.codes`;
 try {
 const currentUrls = process.env.DEPLOYED_URLS || "";
