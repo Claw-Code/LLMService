@@ -1084,23 +1084,38 @@ function parseGeneratedFiles(llmResponse, projectPath, chatId) {
     },
   ]
 
+  const defaultImports = [
+    "import React, { useEffect, useRef, useState, useCallback } from 'react';",
+    "import * as THREE from 'three';"
+  ]
+
   let gameComponentFound = false
 
-  patterns.forEach(({ name, regex, clean, targetFile }) => {
-    if (gameComponentFound) return // Skip if we already found GameComponent
+  const prependMissingImports = (code) => {
+    const importsToAdd = []
+    if (!/import\s+React/.test(code)) importsToAdd.push(defaultImports[0])
+    if (!/import\s+\*\s+as\s+THREE/.test(code)) importsToAdd.push(defaultImports[1])
+    if (importsToAdd.length) {
+      return importsToAdd.join("\n") + "\n\n" + code
+    }
+    return code
+  }
+
+  patterns.forEach(({ name, regex }) => {
+    if (gameComponentFound) return
 
     let match
     while ((match = regex.exec(llmResponse)) !== null) {
       let content = match[1] || match[0]
 
       content = content
-        .replace(/^```(?:tsx|typescript|javascript|js)\s*\n?/gm, "") // Remove opening code blocks
-        .replace(/\n?```\s*$/gm, "") // Remove closing code blocks
-        .replace(/^===.*?===\s*\n?/gm, "") // Remove file separators
-        .replace(/^\/\/\s*===.*?===\s*\n?/gm, "") // Remove commented separators
-        .replace(/^\/\*.*?\*\/\s*\n?/gm, "") // Remove block comment separators
-        .replace(/^\/\/\s*src\/components\/GameComponent\.tsx\s*\n?/gm, "") // Remove GameComponent file comments
-        .replace(/^\/\/\s*GameComponent\.tsx\s*\n?/gm, "") // Remove simple file comments
+        .replace(/^```(?:tsx|typescript|javascript|js)\s*\n?/gm, "")
+        .replace(/\n?```\s*$/gm, "")
+        .replace(/^===.*?===\s*\n?/gm, "")
+        .replace(/^\/\/\s*===.*?===\s*\n?/gm, "")
+        .replace(/^\/\*.*?\*\/\s*\n?/gm, "")
+        .replace(/^\/\/\s*src\/components\/GameComponent\.tsx\s*\n?/gm, "")
+        .replace(/^\/\/\s*GameComponent\.tsx\s*\n?/gm, "")
         .trim()
 
       const hasValidGameContent =
@@ -1117,10 +1132,12 @@ function parseGeneratedFiles(llmResponse, projectPath, chatId) {
       if (hasValidGameContent) {
         console.log(chalk.green(`[v0] ✅ FOUND GAMECOMPONENT via ${name}: ${content.length} chars`))
 
+        content = prependMissingImports(content)
+
         if (!content.includes("export default GameComponent") && !content.includes("export { GameComponent }")) {
           if (content.includes("export default")) {
             content = content.replace(/export default \w+/, "export default GameComponent")
-          } else if (content.includes("function") || content.includes("const")) {
+          } else {
             content += "\n\nexport default GameComponent"
           }
         }
@@ -1136,7 +1153,6 @@ function parseGeneratedFiles(llmResponse, projectPath, chatId) {
   if (!gameComponentFound) {
     console.log(chalk.yellow(`[v0] ⚠️ No GameComponent found, creating fallback from response...`))
 
-    // Extract any substantial React component code
     const componentMatch = llmResponse.match(/(?:import.*?React.*?[\n\r]+)*([\s\S]{1000,})/g)
     if (componentMatch && componentMatch[0]) {
       let fallbackContent = componentMatch[0]
@@ -1146,14 +1162,13 @@ function parseGeneratedFiles(llmResponse, projectPath, chatId) {
         .trim()
 
       if (fallbackContent.length > 500) {
-        // Wrap in GameComponent if needed
         if (!fallbackContent.includes("GameComponent")) {
-          fallbackContent = `import React from 'react'
-
-export default function GameComponent() {
+          fallbackContent = `export default function GameComponent() {
   ${fallbackContent}
 }`
         }
+
+        fallbackContent = prependMissingImports(fallbackContent)
 
         files.set("src/components/GameComponent.tsx", fallbackContent)
         parseLog.filesFound.push({
@@ -1218,6 +1233,7 @@ export default App`,
     validationResults: { success: true, errors: [] },
   }
 }
+
 
 // ============================================================================
 // START THE SERVER
@@ -1389,7 +1405,7 @@ app.post("/api/generate/simple2", async (req, res) => {
       message: "Generating comprehensive React code with OpenAI 20B...",
     })
 
-    await logLLMResponse(chatId, "initial-code", "groq-openai-20b", result.thinkingAnalysis, result.initialCode)
+    await logLLMResponse(chatId, "initial-code", "llama-3.3-70b-versatile", result.thinkingAnalysis, result.initialCode)
 
     sendEvent("step_complete", {
       step: 3,
@@ -1431,7 +1447,7 @@ app.post("/api/generate/simple2", async (req, res) => {
       message: "Generating final production-ready React code (1000+ lines target)...",
     })
 
-    await logLLMResponse(chatId, "final-code", "groq-openai-20b", result.initialCode, result.finalCode)
+    await logLLMResponse(chatId, "final-code", "openai/gpt-oss-120b", result.initialCode, result.finalCode)
 
     sendEvent("step_complete", {
       step: 5,
@@ -1455,7 +1471,7 @@ app.post("/api/generate/simple2", async (req, res) => {
       files: parsedFiles,
       parseLog,
       validationResults,
-    } = parseGeneratedFiles(result.finalCode, projectPath, chatId)
+    } = parseGeneratedFiles(result.initialCode, projectPath, chatId)
 
     // Copy React template files first
     await copyReactTemplate(projectPath)

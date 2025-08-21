@@ -9,8 +9,6 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
-    "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.0",
     "@anthropic-ai/sdk": "latest",
     "@hookform/resolvers": "^3.9.1",
     "@opentelemetry/api": "latest",
@@ -46,8 +44,11 @@
     "readline": "latest",
     "recharts": "2.15.0",
     "sonner": "^1.7.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.0",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
+    "three": "^0.179.1",
     "uuid": "latest",
     "vaul": "^0.9.6",
     "zod": "^3.24.1"
