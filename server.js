@@ -165,15 +165,17 @@ devDependencies: Array.from(devDependencies),
 function generateReactPackageJson(gameName, analyzedDeps, difficulty = "medium") {
 console.log(chalk.cyan(`📦 Generating React package.json for ${gameName}...`))
 const dependencies = {
-react: "^18.2.0",
-"react-dom": "^18.2.0",
+react: "^18.3.1",
+"react-dom": "^18.3.2",
   }
 const devDependencies = {
-"@types/react": "^18.2.0",
-"@types/react-dom": "^18.2.0",
-"@vitejs/plugin-react": "^4.2.0",
-typescript: "^5.0.0",
-vite: "^5.0.0",
+"@types/react": "^18.3.5",
+"@types/react-dom": "^18.3.2",
+"@vitejs/plugin-react": "^4.3.1",
+"@react-three/drei": "^9.97.1",
+"@react-three/fiber": "^8.15.15",
+typescript: "^5.5.4",
+vite: "^5.4.3",
   }
 // Add game engine dependencies based on type
 if (analyzedDeps.gameType === "phaser") {
@@ -446,97 +448,110 @@ throw error
   }
 }
 async function setupDevServer(projectPath, projectId, gameType) {
-try {
-console.log(chalk.cyan(`🚀 Setting up development server for ${gameType} project...`))
-// Install dependencies
-const npmInstall = spawn("npm", ["install"], {
-cwd: projectPath,
-shell: true,
-stdio: "pipe",
-    })
-return new Promise((resolve, reject) => {
-npmInstall.on("close", async (code) => {
-if (code !== 0) {
-console.log(chalk.yellow("npm install had issues, trying to continue..."))
+  try {
+    console.log(chalk.cyan(`🚀 Setting up development server for ${gameType} project...`));
+    const npmInstall = spawn("npm", ["install"], {
+      cwd: projectPath,
+      shell: true,
+      stdio: "pipe",
+    });
+
+    return new Promise((resolve, reject) => {
+      npmInstall.on("close", async (code) => {
+        if (code !== 0) {
+          console.log(chalk.yellow("npm install had issues, trying to continue..."));
         }
-try {
-const port = await findAvailablePort(gameType === "react" ? 5173 : 3000)
-let serverProcess
-let serverCommand
-if (gameType === "react") {
-console.log(chalk.cyan(`🚀 Starting Vite dev server on port ${port}...`))
-serverCommand = ["npm", ["run", "dev", "--", "--port", port.toString(), "--host"]]
+        try {
+          let port = await findAvailablePort(gameType === "react" ? 5173 : 3000);
+          let serverCommand;
+          if (gameType === "react") {
+            console.log(chalk.cyan(`🚀 Starting Vite dev server on port ${port}...`));
+            serverCommand = ["npm", ["run", "dev", "--", "--port", port.toString(), "--host"]];
           } else {
-console.log(chalk.cyan(`🚀 Starting Next.js dev server on port ${port}...`))
-serverCommand = ["npm", ["run", "dev", "--", "--port", port.toString()]]
+            console.log(chalk.cyan(`🚀 Starting Next.js dev server on port ${port}...`));
+            serverCommand = ["npm", ["run", "dev", "--", "--port", port.toString()]];
           }
-serverProcess = spawn(serverCommand[0], serverCommand[1], {
-cwd: projectPath,
-shell: true,
-stdio: "pipe",
-detached: false,
-          })
-let serverStarted = false
-serverProcess.stdout.on("data", (data) => {
-const output = data.toString()
-console.log(chalk.gray(`Server output: ${output}`))
-const isReady =
-gameType === "react"
-? output.includes("Local:") || output.includes("localhost")
-: output.includes("Ready") || output.includes("started server")
-if (isReady && !serverStarted) {
-serverStarted = true
-const serverUrl = `http://localhost:${port}`
-console.log(chalk.green(`✅ ${gameType === "react" ? "Vite" : "Next.js"} server running at ${serverUrl}`))
-resolve({
-url: serverUrl,
-port: port,
-process: serverProcess,
-deploymentType: "development",
-type: gameType,
-projectId,
-              })
+
+          const serverProcess = spawn(serverCommand[0], serverCommand[1], {
+            cwd: projectPath,
+            shell: true,
+            stdio: "pipe",
+            detached: false,
+          });
+
+          let serverStarted = false;
+          let actualPort = port;
+
+          serverProcess.stdout.on("data", (data) => {
+            const output = data.toString();
+            console.log(chalk.gray(`Server output: ${output}`));
+
+            // Parse Vite's output for the actual port
+            const portMatch = output.match(/Local:\s*http:\/\/localhost:(\d+)/);
+            if (portMatch) {
+              actualPort = parseInt(portMatch[1], 10);
+              console.log(chalk.green(`✅ Vite selected port: ${actualPort}`));
             }
-          })
-serverProcess.stderr.on("data", (data) => {
-const output = data.toString()
-console.log(chalk.gray(`Server stderr: ${output}`))
-          })
-setTimeout(
-            () => {
-if (!serverStarted) {
-const serverUrl = `http://localhost:${port}`
-console.log(chalk.yellow(`⚠️ Server should be running at ${serverUrl}`))
-resolve({
-url: serverUrl,
-port: port,
-process: serverProcess,
-deploymentType: "development",
-type: gameType,
-projectId,
-                })
-              }
-            },
-gameType === "react" ? 10000 : 15000,
-          )
-serverProcess.on("error", (error) => {
-console.error(chalk.red("Server error:", error))
-if (!serverStarted) {
-reject(error)
+
+            const isReady =
+              gameType === "react"
+                ? output.includes("Local:") || output.includes("localhost")
+                : output.includes("Ready") || output.includes("started server");
+
+            if (isReady && !serverStarted) {
+              serverStarted = true;
+              const serverUrl = `http://localhost:${actualPort}`;
+              console.log(chalk.green(`✅ ${gameType === "react" ? "Vite" : "Next.js"} server running at ${serverUrl}`));
+              resolve({
+                url: serverUrl,
+                port: actualPort, // Use the actual port Vite is running on
+                process: serverProcess,
+                deploymentType: "development",
+                type: gameType,
+                projectId,
+              });
             }
-          })
+          });
+
+          serverProcess.stderr.on("data", (data) => {
+            const output = data.toString();
+            console.log(chalk.gray(`Server stderr: ${output}`));
+          });
+
+          setTimeout(() => {
+            if (!serverStarted) {
+              const serverUrl = `http://localhost:${actualPort}`;
+              console.log(chalk.yellow(`⚠️ Server should be running at ${serverUrl}`));
+              resolve({
+                url: serverUrl,
+                port: actualPort,
+                process: serverProcess,
+                deploymentType: "development",
+                type: gameType,
+                projectId,
+              });
+            }
+          }, gameType === "react" ? 10000 : 15000);
+
+          serverProcess.on("error", (error) => {
+            console.error(chalk.red("Server error:", error));
+            if (!serverStarted) {
+              reject(error);
+            }
+          });
         } catch (error) {
-reject(error)
+          reject(error);
         }
-      })
-npmInstall.on("error", (error) => {
-console.error(chalk.red("npm install error:", error))
-reject(error)
-      })
-    })
+      });
+
+      npmInstall.on("error", (error) => {
+        console.error(chalk.red("npm install error:", error));
+        reject(error);
+      });
+    });
   } catch (error) {
-console.error(chalk.red("Dev server setup failed:", error.message))
-throw error
+    console.error(chalk.red("Dev server setup failed:", error.message));
+    throw error;
   }
 }
 async function setupAndRunProject(projectPath) {
@@ -1268,27 +1283,27 @@ progress: 14,
 message: "Designing comprehensive game architecture...",
     })
 const result = await llmProvider.generateSimple2WebGame(prompt, chatId)
-await logLLMResponse(chatId, "architecture", "groq", prompt, result.architecture)
-sendEvent("step_complete", {
-step: 1,
-stepName: "Game Architecture",
-output: `Architecture completed (${result.architecture.length} characters)`,
-    })
+// await logLLMResponse(chatId, "architecture", "groq", prompt, result.architecture)
+// sendEvent("step_complete", {
+// step: 1,
+// stepName: "Game Architecture",
+// output: `Architecture completed (${result.architecture.length} characters)`,
+//     })
 // Step 2: Thinking Stage
-currentStep = 2
-sendEvent("progress", {
-step: 2,
-totalSteps: 8,
-stepName: "Thinking Stage",
-progress: 28,
-message: "Analyzing implementation strategy for 1000+ lines...",
-    })
-await logLLMResponse(chatId, "thinking-analysis", "groq", result.architecture, result.thinkingAnalysis)
-sendEvent("step_complete", {
-step: 2,
-stepName: "Thinking Stage",
-output: `Thinking analysis completed (${result.thinkingAnalysis.length} characters)`,
-    })
+// currentStep = 2
+// sendEvent("progress", {
+// step: 2,
+// totalSteps: 8,
+// stepName: "Thinking Stage",
+// progress: 28,
+// message: "Analyzing implementation strategy for 1000+ lines...",
+//     })
+// await logLLMResponse(chatId, "thinking-analysis", "groq", result.architecture, result.thinkingAnalysis)
+// sendEvent("step_complete", {
+// step: 2,
+// stepName: "Thinking Stage",
+// output: `Thinking analysis completed (${result.thinkingAnalysis.length} characters)`,
+//     })
 // Step 3: Initial Code with OpenAI
 currentStep = 3
 sendEvent("progress", {
@@ -1298,7 +1313,7 @@ stepName: "OpenAI Code Generation",
 progress: 42,
 message: "Generating comprehensive React code with OpenAI 20B...",
     })
-await logLLMResponse(chatId, "initial-code", "llama-3.3-70b-versatile", result.thinkingAnalysis, result.initialCode)
+await logLLMResponse(chatId, "initial-code", "llama-3.3-70b-versatile", " ", result.initialCode)
 sendEvent("step_complete", {
 step: 3,
 stepName: "OpenAI Code Generation",
@@ -1443,7 +1458,7 @@ schemaValidation: report,
 crossCheck: {},
 responses: {
 architecture: result.architecture.length,
-thinkingAnalysis: result.thinkingAnalysis.length,
+// thinkingAnalysis: result.thinkingAnalysis.length,
 initialCode: result.initialCode.length,
 feedback: result.feedback.length,
 finalCode: result.finalCode.length,
