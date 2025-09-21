@@ -2491,7 +2491,7 @@ export default function GameComponent() {
         <canvas ref={canvasRef} width={800} height={400} className="block bg-sky-200" tabIndex={0} />
       </div>
 
-      <div className="mt-4 text-center text-sm text-gray-600 max-w-2xl">
+      {/* <div className="mt-4 text-center text-sm text-gray-600 max-w-2xl">
         {gameMode === "game" ? (
           <>
             <p>
@@ -2511,7 +2511,7 @@ export default function GameComponent() {
             <p>Create your own custom Mario levels and share them!</p>
           </>
         )}
-      </div>
+      </div> */}
     </div>
   )
 }
