@@ -2445,13 +2445,13 @@ export default function GameComponent() {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
-      <div className="mb-4 text-center">
+      {/* <div className="mb-4 text-center">
         <h1 className="text-3xl font-bold mb-2">Super Mario Platformer Deluxe</h1>
         <p className="text-gray-600">12 levels, boss battles, power-ups, and level editor!</p>
       </div>
 
       {/* Mode Toggle */}
-      <div className="mb-4 flex gap-4">
+      {/* <div className="mb-4 flex gap-4">
         <button
           onClick={() => setGameMode("game")}
           className={`px-6 py-2 rounded-lg font-bold ${
@@ -2468,10 +2468,10 @@ export default function GameComponent() {
         >
           Level Editor
         </button>
-      </div>
+      </div> */} 
 
       {/* Editor Tools */}
-      {gameMode === "editor" && (
+      {/* {gameMode === "editor" && (
         <div className="mb-4 flex flex-wrap gap-2 justify-center">
           {["platform", "enemy", "coin", "powerUp", "goal", "erase"].map((tool) => (
             <button
@@ -2485,33 +2485,13 @@ export default function GameComponent() {
             </button>
           ))}
         </div>
-      )}
+      )} */}
 
       <div className="border-4 border-gray-800 rounded-lg overflow-hidden shadow-lg">
         <canvas ref={canvasRef} width={800} height={400} className="block bg-sky-200" tabIndex={0} />
       </div>
 
-      {/* <div className="mt-4 text-center text-sm text-gray-600 max-w-2xl">
-        {gameMode === "game" ? (
-          <>
-            <p>
-              <strong>Game Controls:</strong>
-            </p>
-            <p>WASD or Arrow Keys to move • Space or W/↑ to jump • X to shoot fireballs (Fire power)</p>
-            <p>🍄 Mushroom (Super Mario) • 🌸 Fire Flower (Shoot fireballs) • ⭐ Star (Invincible)</p>
-            <p>Boss battles on levels 3, 6, 9, and 12! Complete all 12 levels to win!</p>
-            {gameStatus !== "playing" && <p className="mt-2 font-semibold">Press R to restart or SPACE to continue</p>}
-          </>
-        ) : (
-          <>
-            <p>
-              <strong>Level Editor:</strong>
-            </p>
-            <p>Click to place objects • Select tools above • S: Save • L: Load • T: Test level</p>
-            <p>Create your own custom Mario levels and share them!</p>
-          </>
-        )}
-      </div> */}
+    
     </div>
   )
 }
