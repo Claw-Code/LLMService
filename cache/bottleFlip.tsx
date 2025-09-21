@@ -1,13 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { toast } from "sonner";
 
 // Types
 type BottleType = "coke" | "sprite" | "fanta";
 type GameState = "menu" | "playing" | "paused" | "gameOver" | "levelComplete";
 type ObstacleType = "static" | "moving" | "rotating" | "bouncing";
-
 interface Bottle {
   id: BottleType;
   name: string;
@@ -17,12 +13,10 @@ interface Bottle {
   flipPower: number;
   stability: number;
 }
-
 interface Vector2 {
   x: number;
   y: number;
 }
-
 interface PhysicsBottle {
   position: Vector2;
   velocity: Vector2;
@@ -32,7 +26,6 @@ interface PhysicsBottle {
   hasLanded: boolean;
   landedUpright: boolean;
 }
-
 interface Obstacle {
   id: string;
   type: ObstacleType;
@@ -45,7 +38,6 @@ interface Obstacle {
   };
   rotation?: number;
 }
-
 interface Level {
   id: number;
   name: string;
@@ -66,7 +58,7 @@ const bottles: Bottle[] = [
     capColor: "#B91C1C",
     unlocked: true,
     flipPower: 1.0,
-    stability: 1.0
+    stability: 1.0,
   },
   {
     id: "sprite",
@@ -75,7 +67,7 @@ const bottles: Bottle[] = [
     capColor: "#059669",
     unlocked: false,
     flipPower: 1.1,
-    stability: 0.9
+    stability: 0.9,
   },
   {
     id: "fanta",
@@ -84,8 +76,8 @@ const bottles: Bottle[] = [
     capColor: "#D97706",
     unlocked: false,
     flipPower: 0.9,
-    stability: 1.1
-  }
+    stability: 1.1,
+  },
 ];
 
 // Level configurations
@@ -97,18 +89,18 @@ const levels: Level[] = [
     obstacles: [],
     targetScore: 3,
     maxFlips: 10,
-    unlocked: true
+    unlocked: true,
   },
   {
     id: 2,
     name: "Table Edge",
     difficulty: 2,
     obstacles: [
-      { id: "table1", type: "static", position: { x: 300, y: 400 }, size: { x: 200, y: 20 } }
+      { id: "table1", type: "static", position: { x: 300, y: 400 }, size: { x: 200, y: 20 } },
     ],
     targetScore: 5,
     maxFlips: 15,
-    unlocked: false
+    unlocked: false,
   },
   {
     id: 3,
@@ -123,13 +115,13 @@ const levels: Level[] = [
         movement: {
           speed: 50,
           direction: { x: 1, y: 0 },
-          bounds: { min: { x: 200, y: 350 }, max: { x: 400, y: 350 } }
-        }
-      }
+          bounds: { min: { x: 200, y: 350 }, max: { x: 400, y: 350 } },
+        },
+      },
     ],
     targetScore: 8,
     maxFlips: 20,
-    unlocked: false
+    unlocked: false,
   },
   {
     id: 4,
@@ -143,12 +135,12 @@ const levels: Level[] = [
         type: "rotating",
         position: { x: 300, y: 400 },
         size: { x: 80, y: 20 },
-        rotation: 0
-      }
+        rotation: 0,
+      },
     ],
     targetScore: 10,
     maxFlips: 25,
-    unlocked: false
+    unlocked: false,
   },
   {
     id: 5,
@@ -163,8 +155,8 @@ const levels: Level[] = [
         movement: {
           speed: 30,
           direction: { x: 0, y: 1 },
-          bounds: { min: { x: 150, y: 250 }, max: { x: 150, y: 400 } }
-        }
+          bounds: { min: { x: 150, y: 250 }, max: { x: 150, y: 400 } },
+        },
       },
       {
         id: "bouncer2",
@@ -174,8 +166,8 @@ const levels: Level[] = [
         movement: {
           speed: 40,
           direction: { x: 0, y: -1 },
-          bounds: { min: { x: 450, y: 300 }, max: { x: 450, y: 450 } }
-        }
+          bounds: { min: { x: 450, y: 300 }, max: { x: 450, y: 450 } },
+        },
       },
       {
         id: "mover1",
@@ -185,90 +177,77 @@ const levels: Level[] = [
         movement: {
           speed: 60,
           direction: { x: 1, y: 0 },
-          bounds: { min: { x: 200, y: 380 }, max: { x: 400, y: 380 } }
-        }
-      }
+          bounds: { min: { x: 200, y: 380 }, max: { x: 400, y: 380 } },
+        },
+      },
     ],
     targetScore: 15,
     maxFlips: 30,
     timeLimit: 60,
-    unlocked: false
-  }
+    unlocked: false,
+  },
 ];
 
 // Sound effects using Web Audio API
 class SoundManager {
   private context: AudioContext | null = null;
   private masterVolume = 0.3;
-
   constructor() {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       this.context = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
   }
-
-  private createTone(frequency: number, duration: number, type: OscillatorType = 'sine'): void {
+  private createTone(frequency: number, duration: number, type: OscillatorType = "sine"): void {
     if (!this.context) return;
-
     const oscillator = this.context.createOscillator();
     const gainNode = this.context.createGain();
-
     oscillator.connect(gainNode);
     gainNode.connect(this.context.destination);
-
     oscillator.frequency.setValueAtTime(frequency, this.context.currentTime);
     oscillator.type = type;
-
     gainNode.gain.setValueAtTime(0, this.context.currentTime);
     gainNode.gain.linearRampToValueAtTime(this.masterVolume, this.context.currentTime + 0.01);
     gainNode.gain.exponentialRampToValueAtTime(0.01, this.context.currentTime + duration);
-
     oscillator.start(this.context.currentTime);
     oscillator.stop(this.context.currentTime + duration);
   }
-
   playFlipSound(): void {
-    this.createTone(200, 0.3, 'square');
+    this.createTone(200, 0.3, "square");
   }
-
   playLandSound(): void {
-    this.createTone(150, 0.2, 'sine');
+    this.createTone(150, 0.2, "sine");
   }
-
   playSuccessSound(): void {
-    this.createTone(523, 0.1, 'sine');
-    setTimeout(() => this.createTone(659, 0.1, 'sine'), 100);
-    setTimeout(() => this.createTone(784, 0.2, 'sine'), 200);
+    this.createTone(523, 0.1, "sine");
+    setTimeout(() => this.createTone(659, 0.1, "sine"), 100);
+    setTimeout(() => this.createTone(784, 0.2, "sine"), 200);
   }
-
   playFailSound(): void {
-    this.createTone(200, 0.5, 'sawtooth');
+    this.createTone(200, 0.5, "sawtooth");
   }
-
   playMenuSound(): void {
-    this.createTone(400, 0.1, 'sine');
+    this.createTone(400, 0.1, "sine");
   }
-
   playLevelCompleteSound(): void {
     const notes = [523, 587, 659, 698, 784, 880, 987];
     notes.forEach((note, index) => {
-      setTimeout(() => this.createTone(note, 0.3, 'sine'), index * 100);
+      setTimeout(() => this.createTone(note, 0.3, "sine"), index * 100);
     });
   }
 }
 
 // SVG Bottle Component
-const SVGBottle: React.FC<{ bottle: Bottle; size?: number; className?: string }> = ({ 
-  bottle, 
-  size = 100, 
-  className = "" 
+const SVGBottle: React.FC<{ bottle: Bottle; size?: number; className?: string }> = ({
+  bottle,
+  size = 100,
+  className = "",
 }) => (
   <svg
     width={size}
     height={size * 1.5}
     viewBox="0 0 100 150"
     className={className}
-    style={{ filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.3))' }}
+    style={{ filter: "drop-shadow(0 10px 20px rgba(0,0,0,0.3))" }}
   >
     {/* Bottle body */}
     <path
@@ -277,7 +256,6 @@ const SVGBottle: React.FC<{ bottle: Bottle; size?: number; className?: string }>
       stroke="#000"
       strokeWidth="2"
     />
-    
     {/* Bottle neck */}
     <rect
       x="42"
@@ -289,7 +267,6 @@ const SVGBottle: React.FC<{ bottle: Bottle; size?: number; className?: string }>
       strokeWidth="2"
       rx="2"
     />
-    
     {/* Bottle cap */}
     <rect
       x="40"
@@ -301,7 +278,6 @@ const SVGBottle: React.FC<{ bottle: Bottle; size?: number; className?: string }>
       strokeWidth="2"
       rx="6"
     />
-    
     {/* Label */}
     <rect
       x="38"
@@ -313,7 +289,6 @@ const SVGBottle: React.FC<{ bottle: Bottle; size?: number; className?: string }>
       strokeWidth="1"
       rx="2"
     />
-    
     {/* Brand text */}
     <text
       x="50"
@@ -323,9 +298,8 @@ const SVGBottle: React.FC<{ bottle: Bottle; size?: number; className?: string }>
       fontWeight="bold"
       fill="#000"
     >
-      {bottle.name.split(' ')[0]}
+      {bottle.name.split(" ")[0]}
     </text>
-    
     {/* Shine effect */}
     <ellipse
       cx="45"
@@ -344,10 +318,8 @@ const GameComponent = () => {
   const [currentLevel, setCurrentLevel] = useState<Level>(levels[0]);
   const [unlockedBottles, setUnlockedBottles] = useState<Set<string>>(new Set(["coke"]));
   const [unlockedLevels, setUnlockedLevels] = useState<Set<number>>(new Set([1]));
-  
   // Responsive dimensions
   const [gameArea, setGameArea] = useState({ width: 400, height: 600 });
-  
   // Game mechanics
   const [physicsBottle, setPhysicsBottle] = useState<PhysicsBottle>({
     position: { x: 0.5, y: 0.15 }, // Using relative positions (0-1)
@@ -356,31 +328,29 @@ const GameComponent = () => {
     angularVelocity: 0,
     isFlipping: false,
     hasLanded: false,
-    landedUpright: false
+    landedUpright: false,
   });
-  
   // Scoring and progress
   const [score, setScore] = useState(0);
   const [flipsUsed, setFlipsUsed] = useState(0);
   const [combo, setCombo] = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
-  
   // Animation and effects
-  const [particles, setParticles] = useState<Array<{
-    id: string;
-    position: Vector2;
-    velocity: Vector2;
-    life: number;
-    color: string;
-  }>>([]);
-  
+  const [particles, setParticles] = useState<
+    Array<{
+      id: string;
+      position: Vector2;
+      velocity: Vector2;
+      life: number;
+      color: string;
+    }>
+  >([]);
   // Refs
   const gameCanvasRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number>();
   const soundManager = useRef(new SoundManager());
   const lastTimeRef = useRef<number>(0);
-
   // Dynamic physics constants based on screen size
   const GRAVITY = 0.5;
   const GROUND_Y_RATIO = 0.85; // 85% from top
@@ -395,14 +365,13 @@ const GameComponent = () => {
         const rect = gameCanvasRef.current.getBoundingClientRect();
         setGameArea({
           width: rect.width,
-          height: rect.height
+          height: rect.height,
         });
       }
     };
-
     updateDimensions();
-    window.addEventListener('resize', updateDimensions);
-    return () => window.removeEventListener('resize', updateDimensions);
+    window.addEventListener("resize", updateDimensions);
+    return () => window.removeEventListener("resize", updateDimensions);
   }, [gameState]);
 
   // Initialize game
@@ -410,19 +379,15 @@ const GameComponent = () => {
     const gameLoop = (currentTime: number) => {
       const deltaTime = currentTime - lastTimeRef.current;
       lastTimeRef.current = currentTime;
-      
       if (gameState === "playing") {
         updatePhysics(deltaTime);
         updateObstacles(deltaTime);
         updateParticles(deltaTime);
         updateTimer(deltaTime);
       }
-      
       animationFrameRef.current = requestAnimationFrame(gameLoop);
     };
-    
     animationFrameRef.current = requestAnimationFrame(gameLoop);
-    
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
@@ -431,69 +396,58 @@ const GameComponent = () => {
   }, [gameState]);
 
   // Physics simulation
-  const updatePhysics = useCallback((deltaTime: number) => {
-    setPhysicsBottle(prev => {
-      if (!prev.isFlipping) return prev;
-      
-      const newBottle = { ...prev };
-      const groundY = gameArea.height * GROUND_Y_RATIO;
-      
-      // Apply gravity
-      newBottle.velocity.y += GRAVITY;
-      
-      // Update position (convert relative to absolute for physics)
-      const absolutePos = {
-        x: prev.position.x * gameArea.width,
-        y: prev.position.y * gameArea.height
-      };
-      
-      absolutePos.x += newBottle.velocity.x * (deltaTime / 16);
-      absolutePos.y += newBottle.velocity.y * (deltaTime / 16);
-      
-      // Convert back to relative
-      newBottle.position = {
-        x: absolutePos.x / gameArea.width,
-        y: absolutePos.y / gameArea.height
-      };
-      
-      // Update rotation
-      newBottle.rotation += newBottle.angularVelocity * (deltaTime / 16);
-      newBottle.angularVelocity *= ANGULAR_DAMPING;
-      
-      // Ground collision
-      if (absolutePos.y >= groundY && newBottle.velocity.y > 0) {
-        newBottle.position.y = groundY / gameArea.height;
-        newBottle.velocity.y *= -BOUNCE_DAMPING;
-        newBottle.velocity.x *= 0.8;
-        
-        // Check if bottle has settled
-        if (Math.abs(newBottle.velocity.y) < 2 && Math.abs(newBottle.velocity.x) < 1) {
-          newBottle.isFlipping = false;
-          newBottle.hasLanded = true;
-          newBottle.velocity = { x: 0, y: 0 };
-          
-          // Check if landed upright
-          const normalizedRotation = ((newBottle.rotation % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-          const isUpright = normalizedRotation < UPRIGHT_TOLERANCE || normalizedRotation > (Math.PI * 2 - UPRIGHT_TOLERANCE);
-          
-          newBottle.landedUpright = isUpright;
-          
-          // Handle landing result
-          setTimeout(() => handleLanding(isUpright), 100);
+  const updatePhysics = useCallback(
+    (deltaTime: number) => {
+      setPhysicsBottle((prev) => {
+        if (!prev.isFlipping) return prev;
+        const newBottle = { ...prev };
+        const groundY = gameArea.height * GROUND_Y_RATIO;
+        // Apply gravity
+        newBottle.velocity.y += GRAVITY;
+        // Update position (convert relative to absolute for physics)
+        const absolutePos = {
+          x: prev.position.x * gameArea.width,
+          y: prev.position.y * gameArea.height,
+        };
+        absolutePos.x += newBottle.velocity.x * (deltaTime / 16);
+        absolutePos.y += newBottle.velocity.y * (deltaTime / 16);
+        // Convert back to relative
+        newBottle.position = {
+          x: absolutePos.x / gameArea.width,
+          y: absolutePos.y / gameArea.height,
+        };
+        // Update rotation
+        newBottle.rotation += newBottle.angularVelocity * (deltaTime / 16);
+        newBottle.angularVelocity *= ANGULAR_DAMPING;
+        // Ground collision
+        if (absolutePos.y >= groundY && newBottle.velocity.y > 0) {
+          newBottle.position.y = groundY / gameArea.height;
+          newBottle.velocity.y *= -BOUNCE_DAMPING;
+          newBottle.velocity.x *= 0.8;
+          // Check if bottle has settled
+          if (Math.abs(newBottle.velocity.y) < 2 && Math.abs(newBottle.velocity.x) < 1) {
+            newBottle.isFlipping = false;
+            newBottle.hasLanded = true;
+            newBottle.velocity = { x: 0, y: 0 };
+            // Check if landed upright
+            const normalizedRotation = ((newBottle.rotation % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+            const isUpright = normalizedRotation < UPRIGHT_TOLERANCE || normalizedRotation > (Math.PI * 2 - UPRIGHT_TOLERANCE);
+            newBottle.landedUpright = isUpright;
+            // Handle landing result
+            setTimeout(() => handleLanding(isUpright), 100);
+          }
+          soundManager.current.playLandSound();
         }
-        
-        soundManager.current.playLandSound();
-      }
-      
-      // Wall collisions
-      if (newBottle.position.x <= 0 || newBottle.position.x >= 1) {
-        newBottle.velocity.x *= -0.8;
-        newBottle.position.x = Math.max(0, Math.min(1, newBottle.position.x));
-      }
-      
-      return newBottle;
-    });
-  }, [gameArea]);
+        // Wall collisions
+        if (newBottle.position.x <= 0 || newBottle.position.x >= 1) {
+          newBottle.velocity.x *= -0.8;
+          newBottle.position.x = Math.max(0, Math.min(1, newBottle.position.x));
+        }
+        return newBottle;
+      });
+    },
+    [gameArea]
+  );
 
   // Update moving obstacles
   const updateObstacles = useCallback((deltaTime: number) => {
@@ -503,100 +457,101 @@ const GameComponent = () => {
 
   // Update particle effects
   const updateParticles = useCallback((deltaTime: number) => {
-    setParticles(prev => prev
-      .map(particle => ({
-        ...particle,
-        position: {
-          x: particle.position.x + particle.velocity.x * (deltaTime / 16),
-          y: particle.position.y + particle.velocity.y * (deltaTime / 16)
-        },
-        life: particle.life - (deltaTime / 1000)
-      }))
-      .filter(particle => particle.life > 0)
+    setParticles((prev) =>
+      prev
+        .map((particle) => ({
+          ...particle,
+          position: {
+            x: particle.position.x + particle.velocity.x * (deltaTime / 16),
+            y: particle.position.y + particle.velocity.y * (deltaTime / 16),
+          },
+          life: particle.life - deltaTime / 1000,
+        }))
+        .filter((particle) => particle.life > 0)
     );
   }, []);
 
   // Update timer
-  const updateTimer = useCallback((deltaTime: number) => {
-    if (currentLevel.timeLimit && timeLeft !== null) {
-      setTimeLeft(prev => {
-        if (prev === null) return null;
-        const newTime = prev - (deltaTime / 1000);
-        if (newTime <= 0) {
-          handleGameOver();
-          return 0;
-        }
-        return newTime;
-      });
-    }
-  }, [currentLevel.timeLimit]);
+  const updateTimer = useCallback(
+    (deltaTime: number) => {
+      if (currentLevel.timeLimit && timeLeft !== null) {
+        setTimeLeft((prev) => {
+          if (prev === null) return null;
+          const newTime = prev - deltaTime / 1000;
+          if (newTime <= 0) {
+            handleGameOver();
+            return 0;
+          }
+          return newTime;
+        });
+      }
+    },
+    [currentLevel.timeLimit]
+  );
 
   // Game actions
   const flipBottle = useCallback(() => {
     if (physicsBottle.isFlipping || flipsUsed >= currentLevel.maxFlips) return;
-    
     const power = selectedBottle.flipPower;
     const flipStrength = 8 + Math.random() * 4;
     const spinStrength = 0.2 + Math.random() * 0.1;
-    
-    setPhysicsBottle(prev => ({
+    setPhysicsBottle((prev) => ({
       ...prev,
       velocity: {
         x: (Math.random() - 0.5) * 2,
-        y: -flipStrength * power
+        y: -flipStrength * power,
       },
       angularVelocity: (Math.random() - 0.5) * spinStrength,
       isFlipping: true,
       hasLanded: false,
-      landedUpright: false
+      landedUpright: false,
     }));
-    
-    setFlipsUsed(prev => prev + 1);
+    setFlipsUsed((prev) => prev + 1);
     soundManager.current.playFlipSound();
   }, [physicsBottle.isFlipping, flipsUsed, currentLevel.maxFlips, selectedBottle.flipPower]);
 
   // Handle landing result
-  const handleLanding = useCallback((success: boolean) => {
-    if (success) {
-      const comboBonus = combo + 1;
-      const points = 10 * comboBonus;
-      
-      setScore(prev => prev + points);
-      setCombo(prev => prev + 1);
-      setBestCombo(prev => Math.max(prev, combo + 1));
-      
-      // Create success particles
-      createParticles({
-        x: physicsBottle.position.x * gameArea.width,
-        y: physicsBottle.position.y * gameArea.height
-      }, "#10B981", 15);
-      
-      soundManager.current.playSuccessSound();
-      toast.success(`Perfect flip! +${points} points (${comboBonus}x combo)`, {
-        duration: 2000,
-      });
-      
-      // Check level completion
-      if (score + points >= currentLevel.targetScore) {
-        setTimeout(() => handleLevelComplete(), 1000);
+  const handleLanding = useCallback(
+    (success: boolean) => {
+      if (success) {
+        const comboBonus = combo + 1;
+        const points = 10 * comboBonus;
+        setScore((prev) => prev + points);
+        setCombo((prev) => prev + 1);
+        setBestCombo((prev) => Math.max(prev, combo + 1));
+        // Create success particles
+        createParticles(
+          {
+            x: physicsBottle.position.x * gameArea.width,
+            y: physicsBottle.position.y * gameArea.height,
+          },
+          "#10B981",
+          15
+        );
+        soundManager.current.playSuccessSound();
+        // Check level completion
+        if (score + points >= currentLevel.targetScore) {
+          setTimeout(() => handleLevelComplete(), 1000);
+        }
+      } else {
+        setCombo(0);
+        createParticles(
+          {
+            x: physicsBottle.position.x * gameArea.width,
+            y: physicsBottle.position.y * gameArea.height,
+          },
+          "#EF4444",
+          10
+        );
+        soundManager.current.playFailSound();
       }
-    } else {
-      setCombo(0);
-      createParticles({
-        x: physicsBottle.position.x * gameArea.width,
-        y: physicsBottle.position.y * gameArea.height
-      }, "#EF4444", 10);
-      soundManager.current.playFailSound();
-      toast.error("Bottle fell over! Combo broken!", {
-        duration: 2000,
-      });
-    }
-    
-    // Check game over
-    if (flipsUsed >= currentLevel.maxFlips && score < currentLevel.targetScore) {
-      setTimeout(() => handleGameOver(), 1500);
-    }
-  }, [combo, physicsBottle.position, score, currentLevel, flipsUsed, gameArea]);
+      // Check game over
+      if (flipsUsed >= currentLevel.maxFlips && score < currentLevel.targetScore) {
+        setTimeout(() => handleGameOver(), 1500);
+      }
+    },
+    [combo, physicsBottle.position, score, currentLevel, flipsUsed, gameArea]
+  );
 
   // Create particle effects
   const createParticles = useCallback((position: Vector2, color: string, count: number) => {
@@ -605,13 +560,12 @@ const GameComponent = () => {
       position: { ...position },
       velocity: {
         x: (Math.random() - 0.5) * 200,
-        y: (Math.random() - 0.5) * 200 - 100
+        y: (Math.random() - 0.5) * 200 - 100,
       },
       life: 1 + Math.random(),
-      color
+      color,
     }));
-    
-    setParticles(prev => [...prev, ...newParticles]);
+    setParticles((prev) => [...prev, ...newParticles]);
   }, []);
 
   // Game state handlers
@@ -629,7 +583,7 @@ const GameComponent = () => {
       angularVelocity: 0,
       isFlipping: false,
       hasLanded: false,
-      landedUpright: false
+      landedUpright: false,
     });
     setParticles([]);
   }, []);
@@ -637,33 +591,22 @@ const GameComponent = () => {
   const handleLevelComplete = useCallback(() => {
     setGameState("levelComplete");
     soundManager.current.playLevelCompleteSound();
-    
     // Unlock next level
     const nextLevelId = currentLevel.id + 1;
     if (nextLevelId <= levels.length) {
-      setUnlockedLevels(prev => new Set([...prev, nextLevelId]));
+      setUnlockedLevels((prev) => new Set([...prev, nextLevelId]));
     }
-    
     // Unlock bottles based on progress
     if (currentLevel.id >= 2 && !unlockedBottles.has("sprite")) {
-      setUnlockedBottles(prev => new Set([...prev, "sprite"]));
-      toast.success("🥤 Sprite bottle unlocked!");
+      setUnlockedBottles((prev) => new Set([...prev, "sprite"]));
     }
     if (currentLevel.id >= 4 && !unlockedBottles.has("fanta")) {
-      setUnlockedBottles(prev => new Set([...prev, "fanta"]));
-      toast.success("🍊 Fanta bottle unlocked!");
+      setUnlockedBottles((prev) => new Set([...prev, "fanta"]));
     }
-    
-    toast.success(`Level ${currentLevel.id} completed! 🎉`, {
-      duration: 3000,
-    });
   }, [currentLevel, unlockedBottles]);
 
   const handleGameOver = useCallback(() => {
     setGameState("gameOver");
-    toast.error("Game Over! Better luck next time!", {
-      duration: 3000,
-    });
   }, []);
 
   const resetToMenu = useCallback(() => {
@@ -674,30 +617,60 @@ const GameComponent = () => {
   // Menu Screen
   if (gameState === "menu") {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-primary/20 to-secondary/20 flex items-center justify-center p-2 sm:p-4">
-        <div className="max-w-6xl w-full">
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "linear-gradient(to bottom right, #93c5fd, #86efac)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "1rem",
+        }}
+      >
+        <div style={{ maxWidth: "1200px", width: "100%" }}>
           {/* Title */}
-          <div className="text-center mb-6 sm:mb-12">
-            <h1 className="text-3xl sm:text-6xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent mb-2 sm:mb-4">
+          <div style={{ textAlign: "center", marginBottom: "3rem" }}>
+            <h1
+              style={{
+                fontSize: "3rem",
+                fontWeight: "bold",
+                background: "linear-gradient(to right, #3b82f6, #10b981)",
+                WebkitBackgroundClip: "text",
+                color: "transparent",
+                marginBottom: "1rem",
+              }}
+            >
               🍾 Bottle Flip Mania
             </h1>
-            <p className="text-sm sm:text-xl text-muted-foreground">
+            <p style={{ fontSize: "1.25rem", color: "#6b7280" }}>
               Master the perfect flip across challenging levels!
             </p>
           </div>
-
           {/* Bottle Selection */}
-          <div className="mb-6 sm:mb-12">
-            <h2 className="text-xl sm:text-2xl font-bold text-center mb-4 sm:mb-6">Choose Your Bottle</h2>
-            <div className="grid grid-cols-3 sm:grid-cols-1 md:grid-cols-3 gap-2 sm:gap-6">
+          <div style={{ marginBottom: "3rem" }}>
+            <h2 style={{ fontSize: "1.5rem", fontWeight: "bold", textAlign: "center", marginBottom: "1.5rem" }}>
+              Choose Your Bottle
+            </h2>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: "1.5rem",
+              }}
+            >
               {bottles.map((bottle) => (
-                <Card
+                <div
                   key={bottle.id}
-                  className={`relative overflow-hidden cursor-pointer transform transition-all duration-300 hover:scale-105 ${
-                    selectedBottle.id === bottle.id ? 'ring-2 sm:ring-4 ring-primary' : ''
-                  } ${
-                    unlockedBottles.has(bottle.id) ? 'opacity-100' : 'opacity-50'
-                  }`}
+                  style={{
+                    padding: "1.5rem",
+                    background: "#fff",
+                    borderRadius: "0.5rem",
+                    boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+                    cursor: "pointer",
+                    transition: "transform 0.3s",
+                    opacity: unlockedBottles.has(bottle.id) ? 1 : 0.5,
+                    transform: selectedBottle.id === bottle.id ? "scale(1.05)" : "scale(1)",
+                  }}
                   onClick={() => {
                     if (unlockedBottles.has(bottle.id)) {
                       setSelectedBottle(bottle);
@@ -705,57 +678,81 @@ const GameComponent = () => {
                     }
                   }}
                 >
-                  <div className="p-2 sm:p-8 text-center">
-                    <div className="mb-2 sm:mb-6 flex justify-center">
-                      <SVGBottle bottle={bottle} size={window.innerWidth < 640 ? 50 : 80} />
+                  <div style={{ textAlign: "center" }}>
+                    <div style={{ marginBottom: "1rem", display: "flex", justifyContent: "center" }}>
+                      <SVGBottle bottle={bottle} size={80} />
                     </div>
-                    <h3 className="text-sm sm:text-xl font-bold mb-1 sm:mb-2">{bottle.name}</h3>
-                    <div className="text-xs sm:text-sm text-muted-foreground mb-2 sm:mb-4">
+                    <h3 style={{ fontSize: "1.25rem", fontWeight: "bold", marginBottom: "0.5rem" }}>
+                      {bottle.name}
+                    </h3>
+                    <div style={{ fontSize: "0.875rem", color: "#6b7280", marginBottom: "1rem" }}>
                       <div>Power: {bottle.flipPower}x</div>
                       <div>Stability: {bottle.stability}x</div>
                     </div>
                     {!unlockedBottles.has(bottle.id) && (
-                      <div className="text-xs sm:text-sm font-semibold text-destructive">🔒 Locked</div>
+                      <div style={{ fontSize: "0.875rem", fontWeight: "600", color: "#ef4444" }}>🔒 Locked</div>
                     )}
                   </div>
-                </Card>
+                </div>
               ))}
             </div>
           </div>
-
           {/* Level Selection */}
           <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-center mb-4 sm:mb-6">Select Level</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4">
+            <h2 style={{ fontSize: "1.5rem", fontWeight: "bold", textAlign: "center", marginBottom: "1.5rem" }}>
+              Select Level
+            </h2>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: "1rem",
+              }}
+            >
               {levels.map((level) => (
-                <Card
+                <div
                   key={level.id}
-                  className={`cursor-pointer transform transition-all duration-300 hover:scale-105 ${
-                    unlockedLevels.has(level.id) ? 'opacity-100' : 'opacity-50'
-                  }`}
+                  style={{
+                    padding: "1.5rem",
+                    background: "#fff",
+                    borderRadius: "0.5rem",
+                    boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+                    cursor: "pointer",
+                    transition: "transform 0.3s",
+                    opacity: unlockedLevels.has(level.id) ? 1 : 0.5,
+                  }}
                   onClick={() => {
                     if (unlockedLevels.has(level.id)) {
                       startLevel(level);
                     }
                   }}
                 >
-                  <div className="p-3 sm:p-6">
-                    <div className="flex items-center justify-between mb-2 sm:mb-4">
-                      <h3 className="text-sm sm:text-lg font-bold">{level.name}</h3>
-                      <div className="text-xs sm:text-sm bg-primary/20 px-2 py-1 rounded">
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+                      <h3 style={{ fontSize: "1.125rem", fontWeight: "bold" }}>{level.name}</h3>
+                      <div
+                        style={{
+                          fontSize: "0.875rem",
+                          background: "rgba(59, 130, 246, 0.2)",
+                          padding: "0.25rem 0.5rem",
+                          borderRadius: "0.25rem",
+                        }}
+                      >
                         Level {level.id}
                       </div>
                     </div>
-                    <div className="text-xs sm:text-sm text-muted-foreground space-y-1">
+                    <div style={{ fontSize: "0.875rem", color: "#6b7280", lineHeight: "1.5" }}>
                       <div>🎯 Target: {level.targetScore} points</div>
                       <div>🍾 Max flips: {level.maxFlips}</div>
                       {level.timeLimit && <div>⏱️ Time: {level.timeLimit}s</div>}
                     </div>
                     {!unlockedLevels.has(level.id) && (
-                      <div className="mt-2 text-xs sm:text-sm font-semibold text-destructive">🔒 Locked</div>
+                      <div style={{ marginTop: "0.5rem", fontSize: "0.875rem", fontWeight: "600", color: "#ef4444" }}>
+                        🔒 Locked
+                      </div>
                     )}
                   </div>
-                </Card>
+                </div>
               ))}
             </div>
           </div>
@@ -767,127 +764,179 @@ const GameComponent = () => {
   // Game Screen
   if (gameState === "playing") {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-primary/20 to-secondary/20 flex flex-col">
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "linear-gradient(to bottom right, #93c5fd, #86efac)",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
         {/* Header */}
-        <header className="p-2 sm:p-4 border-b border-border/20 bg-card/50 backdrop-blur-sm">
-          <div className="flex items-center justify-between max-w-6xl mx-auto">
-            <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-              <SVGBottle bottle={selectedBottle} size={30} className="sm:w-10 sm:h-15 flex-shrink-0" />
-              <div className="min-w-0">
-                <h2 className="text-sm sm:text-xl font-bold truncate">{currentLevel.name}</h2>
-                <p className="text-xs sm:text-sm text-muted-foreground">Level {currentLevel.id}</p>
+        <header
+          style={{
+            padding: "1rem",
+            borderBottom: "1px solid rgba(0,0,0,0.1)",
+            background: "rgba(255,255,255,0.5)",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", maxWidth: "1200px", margin: "0 auto" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "1rem", minWidth: 0 }}>
+              <SVGBottle bottle={selectedBottle} size={30} />
+              <div style={{ minWidth: 0 }}>
+                <h2 style={{ fontSize: "1.25rem", fontWeight: "bold", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {currentLevel.name}
+                </h2>
+                <p style={{ fontSize: "0.875rem", color: "#6b7280" }}>Level {currentLevel.id}</p>
               </div>
             </div>
-            
-            <div className="flex items-center gap-2 sm:gap-6">
-              <div className="text-center min-w-0">
-                <div className="text-sm sm:text-2xl font-bold text-primary">{score}</div>
-                <div className="text-xs text-muted-foreground hidden sm:block">Score</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "1.5rem" }}>
+              <div style={{ textAlign: "center", minWidth: 0 }}>
+                <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#3b82f6" }}>{score}</div>
+                <div style={{ fontSize: "0.75rem", color: "#6b7280" }}>Score</div>
               </div>
-              <div className="text-center min-w-0">
-                <div className="text-sm sm:text-2xl font-bold">{currentLevel.maxFlips - flipsUsed}</div>
-                <div className="text-xs text-muted-foreground hidden sm:block">Flips</div>
+              <div style={{ textAlign: "center", minWidth: 0 }}>
+                <div style={{ fontSize: "1.5rem", fontWeight: "bold" }}>{currentLevel.maxFlips - flipsUsed}</div>
+                <div style={{ fontSize: "0.75rem", color: "#6b7280" }}>Flips</div>
               </div>
-              <div className="text-center min-w-0">
-                <div className="text-sm sm:text-2xl font-bold text-secondary">{combo}</div>
-                <div className="text-xs text-muted-foreground hidden sm:block">Combo</div>
+              <div style={{ textAlign: "center", minWidth: 0 }}>
+                <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#10b981" }}>{combo}</div>
+                <div style={{ fontSize: "0.75rem", color: "#6b7280" }}>Combo</div>
               </div>
               {timeLeft !== null && (
-                <div className="text-center min-w-0">
-                  <div className={`text-sm sm:text-2xl font-bold ${timeLeft < 10 ? 'text-destructive' : ''}`}>
+                <div style={{ textAlign: "center", minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: "1.5rem",
+                      fontWeight: "bold",
+                      color: timeLeft < 10 ? "#ef4444" : "inherit",
+                    }}
+                  >
                     {Math.ceil(timeLeft)}
                   </div>
-                  <div className="text-xs text-muted-foreground hidden sm:block">Time</div>
+                  <div style={{ fontSize: "0.75rem", color: "#6b7280" }}>Time</div>
                 </div>
               )}
-              <Button variant="outline" onClick={resetToMenu} size="sm" className="text-xs sm:text-sm">
+              <button
+                style={{
+                  padding: "0.5rem 1rem",
+                  border: "1px solid #d1d5db",
+                  borderRadius: "0.25rem",
+                  background: "transparent",
+                  cursor: "pointer",
+                  fontSize: "0.875rem",
+                }}
+                onClick={resetToMenu}
+              >
                 Menu
-              </Button>
+              </button>
             </div>
           </div>
         </header>
-
         {/* Game Area */}
-        <main className="flex-1 relative overflow-hidden" ref={gameCanvasRef}>
+        <main style={{ flex: 1, position: "relative", overflow: "hidden" }} ref={gameCanvasRef}>
           {/* Game Canvas */}
-          <div className="absolute inset-0 bg-gradient-to-b from-sky-200 to-green-200">
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, #bae6fd, #86efac)" }}>
             {/* Ground */}
-            <div 
-              className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-green-600 to-green-400"
-              style={{ height: `${gameArea.height * (1 - GROUND_Y_RATIO)}px` }}
+            <div
+              style={{
+                position: "absolute",
+                bottom: 0,
+                left: 0,
+                right: 0,
+                background: "linear-gradient(to top, #15803d, #16a34a)",
+                height: `${gameArea.height * (1 - GROUND_Y_RATIO)}px`,
+              }}
             />
-            
             {/* Obstacles */}
-            {currentLevel.obstacles.map(obstacle => (
+            {currentLevel.obstacles.map((obstacle) => (
               <div
                 key={obstacle.id}
-                className="absolute bg-gradient-to-br from-stone-400 to-stone-600 shadow-lg"
                 style={{
+                  position: "absolute",
+                  background: "linear-gradient(to bottom right, #9ca3af, #6b7280)",
+                  boxShadow: "0 4px 6px rgba(0,0,0,0.2)",
                   left: `${(obstacle.position.x / 600) * gameArea.width}px`,
                   top: `${(obstacle.position.y / 600) * gameArea.height}px`,
                   width: `${(obstacle.size.x / 600) * gameArea.width}px`,
                   height: `${(obstacle.size.y / 600) * gameArea.height}px`,
-                  transform: obstacle.rotation ? `rotate(${obstacle.rotation}rad)` : undefined
+                  transform: obstacle.rotation ? `rotate(${obstacle.rotation}rad)` : undefined,
                 }}
               />
             ))}
-            
             {/* Bottle */}
             <div
-              className="absolute transition-none pointer-events-none"
               style={{
+                position: "absolute",
                 left: `${physicsBottle.position.x * gameArea.width - 25}px`,
                 top: `${physicsBottle.position.y * gameArea.height - 60}px`,
                 transform: `rotate(${physicsBottle.rotation}rad)`,
-                zIndex: 10
+                zIndex: 10,
+                pointerEvents: "none",
               }}
             >
-              <SVGBottle 
-                bottle={selectedBottle} 
-                size={Math.min(50, gameArea.width * 0.12)} 
-                className={physicsBottle.landedUpright ? 'animate-bounce' : ''}
+              <SVGBottle
+                bottle={selectedBottle}
+                size={Math.min(50, gameArea.width * 0.12)}
+                className={physicsBottle.landedUpright ? "animate-bounce" : ""}
               />
             </div>
-            
             {/* Particles */}
-            {particles.map(particle => (
+            {particles.map((particle) => (
               <div
                 key={particle.id}
-                className="absolute w-2 h-2 rounded-full pointer-events-none"
                 style={{
-                  left: particle.position.x,
-                  top: particle.position.y,
+                  position: "absolute",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
                   backgroundColor: particle.color,
                   opacity: particle.life,
-                  transform: `scale(${particle.life})`
+                  transform: `scale(${particle.life})`,
+                  left: particle.position.x,
+                  top: particle.position.y,
+                  pointerEvents: "none",
                 }}
               />
             ))}
           </div>
-
           {/* Controls */}
-          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2">
-            <Button
-              size="lg"
-              className="text-base sm:text-lg px-6 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-primary to-secondary hover:scale-105 transform transition-all duration-200 touch-none"
+          <div style={{ position: "absolute", bottom: "1rem", left: "50%", transform: "translateX(-50%)" }}>
+            <button
+              style={{
+                padding: "0.75rem 2rem",
+                fontSize: "1.125rem",
+                background: "linear-gradient(to right, #3b82f6, #10b981)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "0.5rem",
+                cursor: physicsBottle.isFlipping || flipsUsed >= currentLevel.maxFlips ? "not-allowed" : "pointer",
+                opacity: physicsBottle.isFlipping || flipsUsed >= currentLevel.maxFlips ? 0.5 : 1,
+                transition: "transform 0.2s",
+              }}
               onClick={flipBottle}
               disabled={physicsBottle.isFlipping || flipsUsed >= currentLevel.maxFlips}
             >
-              {physicsBottle.isFlipping ? '🌪️ Flipping...' : '🍾 Flip Bottle!'}
-            </Button>
+              {physicsBottle.isFlipping ? "🌪️ Flipping..." : "🍾 Flip Bottle!"}
+            </button>
           </div>
-
           {/* Progress Bar */}
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 w-80 max-w-[90vw]">
-            <div className="bg-card/50 backdrop-blur-sm rounded-full p-2">
-              <div className="flex items-center justify-between text-sm mb-2">
+          <div style={{ position: "absolute", top: "1rem", left: "50%", transform: "translateX(-50%)", width: "20rem", maxWidth: "90vw" }}>
+            <div style={{ background: "rgba(255,255,255,0.5)", backdropFilter: "blur(4px)", borderRadius: "0.5rem", padding: "0.5rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.875rem", marginBottom: "0.5rem" }}>
                 <span>Progress</span>
                 <span>{score}/{currentLevel.targetScore}</span>
               </div>
-              <div className="w-full bg-muted rounded-full h-2">
-                <div 
-                  className="bg-gradient-to-r from-primary to-secondary h-2 rounded-full transition-all duration-500"
-                  style={{ width: `${Math.min(100, (score / currentLevel.targetScore) * 100)}%` }}
+              <div style={{ width: "100%", background: "#e5e7eb", borderRadius: "9999px", height: "0.5rem" }}>
+                <div
+                  style={{
+                    background: "linear-gradient(to right, #3b82f6, #10b981)",
+                    height: "0.5rem",
+                    borderRadius: "9999px",
+                    width: `${Math.min(100, (score / currentLevel.targetScore) * 100)}%`,
+                    transition: "width 0.5s",
+                  }}
                 />
               </div>
             </div>
@@ -900,68 +949,142 @@ const GameComponent = () => {
   // Level Complete Screen
   if (gameState === "levelComplete") {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-primary/20 to-secondary/20 flex items-center justify-center p-4">
-        <Card className="max-w-sm sm:max-w-md w-full p-4 sm:p-8 text-center">
-          <div className="text-4xl sm:text-6xl mb-4">🎉</div>
-          <h1 className="text-2xl sm:text-3xl font-bold mb-4">Level Complete!</h1>
-          <div className="space-y-2 mb-6">
-            <div className="text-sm sm:text-lg">Final Score: <span className="font-bold text-primary">{score}</span></div>
-            <div className="text-sm sm:text-lg">Best Combo: <span className="font-bold text-secondary">{bestCombo}</span></div>
-            <div className="text-sm sm:text-lg">Flips Used: <span className="font-bold">{flipsUsed}/{currentLevel.maxFlips}</span></div>
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "linear-gradient(to bottom right, #93c5fd, #86efac)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "1rem",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: "28rem",
+            width: "100%",
+            padding: "2rem",
+            background: "#fff",
+            borderRadius: "0.5rem",
+            boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>🎉</div>
+          <h1 style={{ fontSize: "2rem", fontWeight: "bold", marginBottom: "1rem" }}>Level Complete!</h1>
+          <div style={{ marginBottom: "1.5rem", lineHeight: "1.5" }}>
+            <div style={{ fontSize: "1rem" }}>
+              Final Score: <span style={{ fontWeight: "bold", color: "#3b82f6" }}>{score}</span>
+            </div>
+            <div style={{ fontSize: "1rem" }}>
+              Best Combo: <span style={{ fontWeight: "bold", color: "#10b981" }}>{bestCombo}</span>
+            </div>
+            <div style={{ fontSize: "1rem" }}>
+              Flips Used: <span style={{ fontWeight: "bold" }}>{flipsUsed}/{currentLevel.maxFlips}</span>
+            </div>
           </div>
-          <div className="space-y-3">
-            <Button 
-              onClick={resetToMenu} 
-              className="w-full"
-              size="lg"
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <button
+              style={{
+                padding: "0.75rem",
+                background: "linear-gradient(to right, #3b82f6, #10b981)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "0.5rem",
+                cursor: "pointer",
+                fontSize: "1rem",
+              }}
+              onClick={resetToMenu}
             >
               Back to Menu
-            </Button>
+            </button>
             {currentLevel.id < levels.length && (
-              <Button 
-                onClick={() => startLevel(levels[currentLevel.id])} 
-                variant="outline"
-                className="w-full"
-                size="lg"
+              <button
+                style={{
+                  padding: "0.75rem",
+                  background: "transparent",
+                  border: "1px solid #d1d5db",
+                  borderRadius: "0.5rem",
+                  cursor: "pointer",
+                  fontSize: "1rem",
+                }}
+                onClick={() => startLevel(levels[currentLevel.id])}
               >
                 Next Level
-              </Button>
+              </button>
             )}
           </div>
-        </Card>
+        </div>
       </div>
     );
   }
 
   // Game Over Screen
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary/20 to-secondary/20 flex items-center justify-center p-4">
-      <Card className="max-w-sm sm:max-w-md w-full p-4 sm:p-8 text-center">
-        <div className="text-4xl sm:text-6xl mb-4">💥</div>
-        <h1 className="text-2xl sm:text-3xl font-bold mb-4">Game Over!</h1>
-        <div className="space-y-2 mb-6">
-          <div className="text-sm sm:text-lg">Final Score: <span className="font-bold text-primary">{score}</span></div>
-          <div className="text-sm sm:text-lg">Target: <span className="font-bold">{currentLevel.targetScore}</span></div>
-          <div className="text-sm sm:text-lg">Best Combo: <span className="font-bold text-secondary">{bestCombo}</span></div>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "linear-gradient(to bottom right, #93c5fd, #86efac)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: "28rem",
+          width: "100%",
+          padding: "2rem",
+          background: "#fff",
+          borderRadius: "0.5rem",
+          boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>💥</div>
+        <h1 style={{ fontSize: "2rem", fontWeight: "bold", marginBottom: "1rem" }}>Game Over!</h1>
+        <div style={{ marginBottom: "1.5rem", lineHeight: "1.5" }}>
+          <div style={{ fontSize: "1rem" }}>
+            Final Score: <span style={{ fontWeight: "bold", color: "#3b82f6" }}>{score}</span>
+          </div>
+          <div style={{ fontSize: "1rem" }}>
+            Target: <span style={{ fontWeight: "bold" }}>{currentLevel.targetScore}</span>
+          </div>
+          <div style={{ fontSize: "1rem" }}>
+            Best Combo: <span style={{ fontWeight: "bold", color: "#10b981" }}>{bestCombo}</span>
+          </div>
         </div>
-        <div className="space-y-3">
-          <Button 
-            onClick={() => startLevel(currentLevel)} 
-            className="w-full"
-            size="lg"
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          <button
+            style={{
+              padding: "0.75rem",
+              background: "linear-gradient(to right, #3b82f6, #10b981)",
+              color: "#fff",
+              border: "none",
+              borderRadius: "0.5rem",
+              cursor: "pointer",
+              fontSize: "1rem",
+            }}
+            onClick={() => startLevel(currentLevel)}
           >
             Try Again
-          </Button>
-          <Button 
-            onClick={resetToMenu} 
-            variant="outline"
-            className="w-full"
-            size="lg"
+          </button>
+          <button
+            style={{
+              padding: "0.75rem",
+              background: "transparent",
+              border: "1px solid #d1d5db",
+              borderRadius: "0.5rem",
+              cursor: "pointer",
+              fontSize: "1rem",
+            }}
+            onClick={resetToMenu}
           >
             Back to Menu
-          </Button>
+          </button>
         </div>
-      </Card>
+      </div>
     </div>
   );
 };
