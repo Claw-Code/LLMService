@@ -14,144 +14,6 @@ import { exec } from "child_process";
 import util from "util";
 import { parseGeneratedFiles } from "./lib/code-writer.js";
 
-// Add these constants at the top with other constants
-const URLS_LOG_PATH = path.join("deployed-urls.json");
-
-// ============================================================================
-// URL TRACKING FUNCTIONS
-// ============================================================================
-async function saveDeployedUrl(urlData) {
-  try {
-    let urls = [];
-    
-    // Read existing URLs
-    if (await fs.pathExists(URLS_LOG_PATH)) {
-      const content = await fs.readFile(URLS_LOG_PATH, 'utf8');
-      try {
-        urls = JSON.parse(content);
-      } catch (error) {
-        console.error(chalk.yellow("⚠️ Could not parse existing URLs file, starting fresh"));
-        urls = [];
-      }
-    }
-    
-    // Add new URL data
-    const urlEntry = {
-      id: urlData.projectId || uuidv4(),
-      chatId: urlData.chatId,
-      url: urlData.url,
-      type: urlData.type, // 'nginx' or 'localhost'
-      subdomain: urlData.subdomain,
-      port: urlData.port,
-      projectPath: urlData.projectPath,
-      prompt: urlData.prompt,
-      timestamp: new Date().toISOString(),
-      status: 'active',
-      ...urlData // Include any additional data
-    };
-    
-    urls.push(urlEntry);
-    
-    // Save updated URLs
-    await fs.writeFile(URLS_LOG_PATH, JSON.stringify(urls, null, 2));
-    console.log(chalk.green(`✅ Saved URL to log: ${urlData.url}`));
-    
-    return urlEntry;
-  } catch (error) {
-    console.error(chalk.red(`❌ Failed to save URL to log: ${error.message}`));
-    return null;
-  }
-}
-
-// Update deployProjectToNginx function to save URLs
-async function deployProjectToNginx(subdomain, projectPath, prompt, chatId, sendEvent) {
-  const sanitizedSubdomain = subdomain
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "")
-    .substring(0, 63);
-  if (!sanitizedSubdomain) throw new Error("Invalid subdomain");
-
-  try {
-    // ... existing deployment code ...
-
-    const httpUrl = `https://${sanitizedSubdomain}.claw.codes`;
-    const httpsUrl = `https://${sanitizedSubdomain}.claw.codes`;
-    
-    // Save URL to tracking file
-    await saveDeployedUrl({
-      projectId: sanitizedSubdomain,
-      chatId,
-      url: httpsUrl,
-      type: 'nginx',
-      subdomain: sanitizedSubdomain,
-      projectPath,
-      prompt: prompt.slice(0, 200),
-      deploymentPath: nginxPath,
-      httpUrl,
-      httpsUrl
-    });
-
-    console.log(chalk.green(`🚀 Successfully deployed to ${httpsUrl} and ${httpUrl}`));
-    return { httpUrl, httpsUrl, url: httpsUrl, subdomain: sanitizedSubdomain, deploymentPath: nginxPath };
-  } catch (error) {
-    console.error(chalk.red(`❌ Nginx deployment failed:`, error.message));
-    sendEvent("error", {
-      error: "Deployment failed",
-      details: error.message,
-      chatId,
-    });
-    throw new Error(`Deployment failed: ${error.message}`);
-  }
-}
-
-// Update setupDevServer function to save URLs
-async function setupDevServer(projectPath, projectId, gameType) {
-  try {
-    // ... existing setup code ...
-    
-    return new Promise((resolve, reject) => {
-      npmInstall.on("close", async (code) => {
-        // ... existing code ...
-        
-        serverProcess.stdout.on("data", (data) => {
-          // ... existing code ...
-          
-          if (isReady && !serverStarted) {
-            serverStarted = true;
-            const serverUrl = `http://localhost:${actualPort}`;
-            console.log(chalk.green(`✅ ${gameType === "react" ? "Vite" : "Next.js"} server running at ${serverUrl}`));
-            
-            // Save URL to tracking file
-            saveDeployedUrl({
-              projectId,
-              url: serverUrl,
-              type: 'localhost',
-              port: actualPort,
-              projectPath,
-              gameType,
-              deploymentType: "development"
-            });
-            
-            resolve({
-              url: serverUrl,
-              port: actualPort,
-              process: serverProcess,
-              deploymentType: "development",
-              type: gameType,
-              projectId,
-            });
-          }
-        });
-        
-        // ... rest of existing code ...
-      });
-    });
-  } catch (error) {
-    console.error(chalk.red("Dev server setup failed:", error.message));
-    throw error;
-  }
-}
-
 const execAsync = util.promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -461,6 +323,106 @@ async function setupAndDeployProject(projectPath, projectId, gameType = "react",
   }
 }
 
+async function deployProjectToNginx(subdomain, projectPath, prompt, chatId, sendEvent) {
+  const sanitizedSubdomain = subdomain
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .substring(0, 63);
+  if (!sanitizedSubdomain) throw new Error("Invalid subdomain");
+
+  try {
+    sendEvent("progress", {
+      step: 3,
+      totalSteps: 4,
+      stepName: "Building Project",
+      progress: 88,
+      message: "Running npm install and build...",
+    });
+    console.log(chalk.cyan(`📦 Running npm install in ${projectPath}...`));
+    try {
+      await execAsync("npm install", { cwd: projectPath, timeout: 60000 });
+    } catch (installError) {
+      console.log(chalk.yellow("npm install had issues, continuing with build..."));
+    }
+
+    console.log(chalk.cyan(`🔨 Running build in ${projectPath}`));
+    try {
+      await execAsync("npm run build", { cwd: projectPath, timeout: 30000 });
+    } catch (buildError) {
+      console.log(chalk.yellow("Build command had issues, using source files directly..."));
+    }
+
+    const distPath = path.join(projectPath, "dist");
+    const buildPath = path.join(projectPath, "build");
+    let buildOutputPath = projectPath;
+    if (await fs.pathExists(distPath)) {
+      buildOutputPath = distPath;
+      console.log(chalk.green("✅ Using dist/ output"));
+    } else if (await fs.pathExists(buildPath)) {
+      buildOutputPath = buildPath;
+      console.log(chalk.green("✅ Using build/ output"));
+    } else {
+      console.log(chalk.yellow("⚠️ No build output found, using source files"));
+    }
+
+    const nginxPath = path.join(NGINX_PROJECTS_PATH, sanitizedSubdomain + ".claw.codes");
+    await fs.ensureDir(nginxPath);
+    console.log(chalk.cyan(`📋 Copying from ${buildOutputPath} to ${nginxPath}`));
+    await fs.copy(buildOutputPath, nginxPath, { overwrite: true });
+
+    sendEvent("progress", {
+      step: 3,
+      totalSteps: 4,
+      stepName: "Reloading Nginx",
+      progress: 96,
+      message: "Reloading nginx configuration...",
+    });
+    console.log(chalk.cyan("🔄 Reloading nginx..."));
+    try {
+      await execAsync("sudo nginx -t");
+      await execAsync("sudo nginx -s reload");
+      console.log(chalk.green("✅ Nginx reloaded successfully"));
+    } catch (nginxError) {
+      console.log(chalk.yellow("⚠️ Nginx reload had issues:", nginxError.message));
+      sendEvent("error", {
+        error: "Nginx reload failed",
+        details: nginxError.message,
+        chatId,
+      });
+    }
+
+    const deployTime = new Date().toISOString();
+    const logEntry = `${deployTime} - Deployed ${sanitizedSubdomain}.claw.codes (Chat ${chatId}) - ${prompt.slice(0, 100)}\n`;
+    try {
+      await fs.appendFile(DEPLOY_LOG_PATH, logEntry);
+    } catch (logError) {
+      console.log(chalk.yellow("⚠️ Could not write to deploy log:", logError.message));
+    }
+
+    const httpUrl = `https://${sanitizedSubdomain}.claw.codes`;
+    const httpsUrl = `https://${sanitizedSubdomain}.claw.codes`;
+    try {
+      const currentUrls = process.env.DEPLOYED_URLS || "";
+      const newUrls = [httpUrl, httpsUrl].filter(url => !currentUrls.includes(url));
+      const updatedUrls = [...newUrls, ...currentUrls.split(",").filter(Boolean)].join(",");
+      process.env.DEPLOYED_URLS = updatedUrls;
+      console.log(chalk.green(`✅ Updated DEPLOYED_URLS: ${updatedUrls}`));
+    } catch (envError) {
+      console.log(chalk.yellow("⚠️ Could not update DEPLOYED_URLS:", envError.message));
+    }
+
+    console.log(chalk.green(`🚀 Successfully deployed to ${httpsUrl} and ${httpUrl}`));
+    return { httpUrl, httpsUrl, url: httpsUrl, subdomain: sanitizedSubdomain, deploymentPath: nginxPath };
+  } catch (error) {
+    console.error(chalk.red(`❌ Nginx deployment failed:`, error.message));
+    sendEvent("error", {
+      error: "Deployment failed",
+      details: error.message,
+      chatId,
+    });
+    throw new Error(`Deployment failed: ${error.message}`);
+  }
+}
 
 async function setupNginxDeployment(projectPath, projectId, gameType) {
   try {
@@ -520,6 +482,113 @@ async function setupNginxDeployment(projectPath, projectId, gameType) {
     }
   }
 
+async function setupDevServer(projectPath, projectId, gameType) {
+  try {
+    console.log(chalk.cyan(`🚀 Setting up development server for ${gameType} project...`));
+    const npmInstall = spawn("npm", ["install"], {
+      cwd: projectPath,
+      shell: true,
+      stdio: "pipe",
+    });
+
+    return new Promise((resolve, reject) => {
+      npmInstall.on("close", async (code) => {
+        if (code !== 0) {
+          console.log(chalk.yellow("npm install had issues, trying to continue..."));
+        }
+        try {
+          let port = await findAvailablePort(gameType === "react" ? 5173 : 3000);
+          let serverCommand;
+          if (gameType === "react") {
+            console.log(chalk.cyan(`🚀 Starting Vite dev server on port ${port}...`));
+            serverCommand = ["npm", ["run", "dev", "--", "--port", port.toString(), "--host"]];
+          } else {
+            console.log(chalk.cyan(`🚀 Starting Next.js dev server on port ${port}...`));
+            serverCommand = ["npm", ["run", "dev", "--", "--port", port.toString()]];
+          }
+
+          const serverProcess = spawn(serverCommand[0], serverCommand[1], {
+            cwd: projectPath,
+            shell: true,
+            stdio: "pipe",
+            detached: false,
+          });
+
+          let serverStarted = false;
+          let actualPort = port;
+
+          serverProcess.stdout.on("data", (data) => {
+            const output = data.toString();
+            console.log(chalk.gray(`Server output: ${output}`));
+
+            // Parse Vite's output for the actual port
+            const portMatch = output.match(/Local:\s*http:\/\/localhost:(\d+)/);
+            if (portMatch) {
+              actualPort = parseInt(portMatch[1], 10);
+              console.log(chalk.green(`✅ Vite selected port: ${actualPort}`));
+            }
+
+            const isReady =
+              gameType === "react"
+                ? output.includes("Local:") || output.includes("localhost")
+                : output.includes("Ready") || output.includes("started server");
+
+            if (isReady && !serverStarted) {
+              serverStarted = true;
+              const serverUrl = `http://localhost:${actualPort}`;
+              console.log(chalk.green(`✅ ${gameType === "react" ? "Vite" : "Next.js"} server running at ${serverUrl}`));
+              resolve({
+                url: serverUrl,
+                port: actualPort, // Use the actual port Vite is running on
+                process: serverProcess,
+                deploymentType: "development",
+                type: gameType,
+                projectId,
+              });
+            }
+          });
+
+          serverProcess.stderr.on("data", (data) => {
+            const output = data.toString();
+            console.log(chalk.gray(`Server stderr: ${output}`));
+          });
+
+          setTimeout(() => {
+            if (!serverStarted) {
+              const serverUrl = `http://localhost:${actualPort}`;
+              console.log(chalk.yellow(`⚠️ Server should be running at ${serverUrl}`));
+              resolve({
+                url: serverUrl,
+                port: actualPort,
+                process: serverProcess,
+                deploymentType: "development",
+                type: gameType,
+                projectId,
+              });
+            }
+          }, gameType === "react" ? 10000 : 15000);
+
+          serverProcess.on("error", (error) => {
+            console.error(chalk.red("Server error:", error));
+            if (!serverStarted) {
+              reject(error);
+            }
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      npmInstall.on("error", (error) => {
+        console.error(chalk.red("npm install error:", error));
+        reject(error);
+      });
+    });
+  } catch (error) {
+    console.error(chalk.red("Dev server setup failed:", error.message));
+    throw error;
+  }
+}
 
 async function setupAndRunProject(projectPath) {
   return new Promise(async (resolve, reject) => {
@@ -937,183 +1006,6 @@ async function copyReactTemplate(projectPath) {
 async function startViteDevServer(projectPath, projectId) {
   return await setupDevServer(projectPath, projectId, "react");
 }
-
-
-// ============================================================================
-// API ENDPOINT FOR RETRIEVING URLS
-// ============================================================================
-app.get("/api/deployed-urls", async (req, res) => {
-  try {
-    let urls = [];
-    
-    if (await fs.pathExists(URLS_LOG_PATH)) {
-      const content = await fs.readFile(URLS_LOG_PATH, 'utf8');
-      urls = JSON.parse(content);
-    }
-    
-    // Optional filters via query params
-    const { type, status, limit, sortBy = 'timestamp', order = 'desc' } = req.query;
-    
-    // Apply filters
-    let filteredUrls = urls;
-    
-    if (type) {
-      filteredUrls = filteredUrls.filter(url => url.type === type);
-    }
-    
-    if (status) {
-      filteredUrls = filteredUrls.filter(url => url.status === status);
-    }
-    
-    // Sort
-    filteredUrls.sort((a, b) => {
-      const aVal = a[sortBy] || '';
-      const bVal = b[sortBy] || '';
-      return order === 'desc' ? 
-        (bVal > aVal ? 1 : -1) : 
-        (aVal > bVal ? 1 : -1);
-    });
-    
-    // Limit
-    if (limit) {
-      filteredUrls = filteredUrls.slice(0, parseInt(limit));
-    }
-    
-    res.json({
-      success: true,
-      total: filteredUrls.length,
-      urls: filteredUrls,
-      filters: { type, status, limit, sortBy, order }
-    });
-  } catch (error) {
-    console.error(chalk.red("Failed to retrieve URLs:", error.message));
-    res.status(500).json({
-      success: false,
-      error: "Failed to retrieve URLs",
-      details: error.message
-    });
-  }
-});
-
-// API to get a specific URL by ID
-app.get("/api/deployed-urls/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    let urls = [];
-    
-    if (await fs.pathExists(URLS_LOG_PATH)) {
-      const content = await fs.readFile(URLS_LOG_PATH, 'utf8');
-      urls = JSON.parse(content);
-    }
-    
-    const url = urls.find(u => u.id === id || u.projectId === id);
-    
-    if (url) {
-      res.json({
-        success: true,
-        url
-      });
-    } else {
-      res.status(404).json({
-        success: false,
-        error: "URL not found"
-      });
-    }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Failed to retrieve URL",
-      details: error.message
-    });
-  }
-});
-
-// API to update URL status (e.g., mark as inactive)
-app.patch("/api/deployed-urls/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-    
-    let urls = [];
-    if (await fs.pathExists(URLS_LOG_PATH)) {
-      const content = await fs.readFile(URLS_LOG_PATH, 'utf8');
-      urls = JSON.parse(content);
-    }
-    
-    const urlIndex = urls.findIndex(u => u.id === id || u.projectId === id);
-    
-    if (urlIndex !== -1) {
-      urls[urlIndex] = {
-        ...urls[urlIndex],
-        status,
-        updatedAt: new Date().toISOString()
-      };
-      
-      await fs.writeFile(URLS_LOG_PATH, JSON.stringify(urls, null, 2));
-      
-      res.json({
-        success: true,
-        url: urls[urlIndex]
-      });
-    } else {
-      res.status(404).json({
-        success: false,
-        error: "URL not found"
-      });
-    }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Failed to update URL",
-      details: error.message
-    });
-  }
-});
-
-// API to get statistics about deployed URLs
-app.get("/api/deployed-urls/stats", async (req, res) => {
-  try {
-    let urls = [];
-    
-    if (await fs.pathExists(URLS_LOG_PATH)) {
-      const content = await fs.readFile(URLS_LOG_PATH, 'utf8');
-      urls = JSON.parse(content);
-    }
-    
-    const stats = {
-      total: urls.length,
-      byType: {
-        nginx: urls.filter(u => u.type === 'nginx').length,
-        localhost: urls.filter(u => u.type === 'localhost').length
-      },
-      byStatus: {
-        active: urls.filter(u => u.status === 'active').length,
-        inactive: urls.filter(u => u.status === 'inactive').length
-      },
-      recentDeployments: urls
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-        .slice(0, 5)
-        .map(u => ({
-          id: u.id,
-          url: u.url,
-          type: u.type,
-          timestamp: u.timestamp
-        }))
-    };
-    
-    res.json({
-      success: true,
-      stats
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Failed to retrieve stats",
-      details: error.message
-    });
-  }
-});
-
 
 // In server.js, replace the relevant section in the /api/generate/simple2 endpoint
 app.post("/api/generate/simple2", async (req, res) => {

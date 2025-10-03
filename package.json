@@ -11,6 +11,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "latest",
     "@hookform/resolvers": "^3.9.1",
+    "@modelcontextprotocol/sdk": "^1.19.1",
     "@opentelemetry/api": "latest",
     "@opentelemetry/exporter-trace-otlp-proto": "latest",
     "@opentelemetry/sdk-trace-base": "latest",
