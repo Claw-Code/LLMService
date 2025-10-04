@@ -1026,7 +1026,11 @@ app.post("/api/generate/simple2", async (req, res) => {
   };
 
   try {
-    const { prompt, subdomain } = req.body;
+    const { prompt, subdomain, existingCode, fixPrompt, originalPrompt } = req.body;
+    
+    // Check if this is an update/fix request
+    const isUpdateRequest = !!(existingCode && fixPrompt);
+    
     if (!prompt || !prompt.trim()) {
       sendEvent("error", {
         error: "Game description is required",
@@ -1036,15 +1040,33 @@ app.post("/api/generate/simple2", async (req, res) => {
       return;
     }
 
-    console.log(chalk.blue(`🚀 Starting BULLETPROOF SIMPLE2 chain for Chat ${chatId}`));
-    console.log(chalk.blue(`🎮 Game Request: ${prompt}`));
-    sendEvent("progress", {
-      step: 0,
-      totalSteps: 6,
-      stepName: "Initialization",
-      progress: 0,
-      message: "Starting BULLETPROOF Simple2 chain with React templates...",
-    });
+    if (isUpdateRequest) {
+      console.log(chalk.blue(`🔧 Starting CODE UPDATE/FIX chain for Chat ${chatId}`));
+      console.log(chalk.blue(`🎯 Fix Request: ${fixPrompt}`));
+      console.log(chalk.blue(`📝 Original Prompt: ${originalPrompt || 'Not provided'}`));
+      console.log(chalk.blue(`💻 Existing Code Length: ${existingCode.length} characters`));
+      
+      sendEvent("progress", {
+        step: 0,
+        totalSteps: 3, // Reduced steps for update flow
+        stepName: "Update Initialization",
+        progress: 0,
+        message: "Starting code update/fix process...",
+        isUpdate: true,
+        fixPrompt: fixPrompt
+      });
+    } else {
+      console.log(chalk.blue(`🚀 Starting BULLETPROOF SIMPLE2 chain for Chat ${chatId}`));
+      console.log(chalk.blue(`🎮 Game Request: ${prompt}`));
+      sendEvent("progress", {
+        step: 0,
+        totalSteps: 6,
+        stepName: "Initialization",
+        progress: 0,
+        message: "Starting BULLETPROOF Simple2 chain with React templates...",
+        isUpdate: false
+      });
+    }
 
     let projectId;
     if (subdomain && NGINX_ENABLED) {
@@ -1057,82 +1079,124 @@ app.post("/api/generate/simple2", async (req, res) => {
     const projectPath = path.join(PROJECTS_DIR, projectId);
     await fs.mkdir(projectPath, { recursive: true });
 
-    // Step 1: Game Architecture
-    currentStep = 1;
-    sendEvent("progress", {
-      step: 1,
-      totalSteps: 6,
-      stepName: "Game Architecture",
-      progress: 16,
-      message: "Designing comprehensive game architecture...",
-    });
-    const result = await llmProvider.generateSimple2WebGame(prompt, chatId);
-    await logLLMResponse(chatId, "architecture", "groq", prompt, result.architecture);
-    sendEvent("step_complete", {
-      step: 1,
-      stepName: "Game Architecture",
-      output: `Architecture completed (${result.architecture.length} characters)`,
-    });
+    let result;
 
-    // Step 2: Initial Code with OpenAI
-    currentStep = 2;
-    sendEvent("progress", {
-      step: 2,
-      totalSteps: 6,
-      stepName: "OpenAI Code Generation",
-      progress: 33,
-      message: "Generating comprehensive React code with OpenAI 20B...",
-    });
-    await logLLMResponse(chatId, "initial-code", "llama-3.3-70b-versatile", " ", result.initialCode);
-    sendEvent("step_complete", {
-      step: 2,
-      stepName: "OpenAI Code Generation",
-      output: `Initial code completed (${result.initialCode.length} characters)`,
-    });
+    if (isUpdateRequest) {
+      // UPDATE/FIX FLOW - Streamlined process
+      
+      // Step 1: Code Update
+      currentStep = 1;
+      sendEvent("progress", {
+        step: 1,
+        totalSteps: 3,
+        stepName: "Code Analysis & Update",
+        progress: 33,
+        message: "Analyzing existing code and applying fixes...",
+        isUpdate: true
+      });
+      
+      result = await llmProvider.generateSimple2WebGame(
+        prompt, 
+        "medium", 
+        existingCode, 
+        fixPrompt
+      );
+      
+      await logLLMResponse(chatId, "code-update", "openai/gpt-oss-120b", 
+        `Fix: ${fixPrompt}\nOriginal: ${originalPrompt || prompt}`, 
+        result.finalCode
+      );
+      
+      sendEvent("step_complete", {
+        step: 1,
+        stepName: "Code Analysis & Update", 
+        output: `Code updated successfully (${result.finalCode.length} characters)`,
+        isUpdate: true
+      });
 
-    if (!result.initialCode || result.initialCode.length < 1000) {
-      console.log(chalk.yellow(`⚠️ Warning: Initial code may be insufficient (${result.initialCode.length} chars)`));
+    } else {
+      // NORMAL FLOW - Full generation process
+      
+      // Step 1: Game Architecture
+      currentStep = 1;
+      sendEvent("progress", {
+        step: 1,
+        totalSteps: 6,
+        stepName: "Game Architecture",
+        progress: 16,
+        message: "Designing comprehensive game architecture...",
+      });
+      result = await llmProvider.generateSimple2WebGame(prompt, chatId);
+      await logLLMResponse(chatId, "architecture", "groq", prompt, result.architecture);
+      sendEvent("step_complete", {
+        step: 1,
+        stepName: "Game Architecture",
+        output: `Architecture completed (${result.architecture.length} characters)`,
+      });
+
+      // Step 2: Initial Code with OpenAI
+      currentStep = 2;
+      sendEvent("progress", {
+        step: 2,
+        totalSteps: 6,
+        stepName: "OpenAI Code Generation",
+        progress: 33,
+        message: "Generating comprehensive React code with OpenAI 20B...",
+      });
+      await logLLMResponse(chatId, "initial-code", "llama-3.3-70b-versatile", " ", result.initialCode);
+      sendEvent("step_complete", {
+        step: 2,
+        stepName: "OpenAI Code Generation",
+        output: `Initial code completed (${result.initialCode.length} characters)`,
+      });
+
+      if (!result.initialCode || result.initialCode.length < 1000) {
+        console.log(chalk.yellow(`⚠️ Warning: Initial code may be insufficient (${result.initialCode.length} chars)`));
+      }
+
+      // Step 3: Feedback Loop
+      currentStep = 3;
+      sendEvent("progress", {
+        step: 3,
+        totalSteps: 6,
+        stepName: "Feedback Loop",
+        progress: 50,
+        message: "Analyzing code quality and providing improvements...",
+      });
+      await logLLMResponse(chatId, "feedback-loop", "groq", result.initialCode, result.feedback);
+      sendEvent("step_complete", {
+        step: 3,
+        stepName: "Feedback Loop",
+        output: `Feedback analysis completed (${result.feedback.length} characters)`,
+      });
+
+      // Step 4: Final Expanded Code
+      currentStep = 4;
+      sendEvent("progress", {
+        step: 4,
+        totalSteps: 6,
+        stepName: "Final Expanded Code",
+        progress: 66,
+        message: "Generating final production-ready React code (1000+ lines target)...",
+      });
+      await logLLMResponse(chatId, "final-code", "openai/gpt-oss-120b", result.initialCode, result.finalCode);
+      sendEvent("step_complete", {
+        step: 4,
+        stepName: "Final Expanded Code",
+        output: `Final code completed (${result.finalCode.length} characters)`,
+      });
     }
 
-    // Step 3: Feedback Loop
-    currentStep = 3;
+    // Common steps for both flows - Template Copy & File Parsing
+    const templateStepNumber = isUpdateRequest ? 2 : 5;
+    const totalSteps = isUpdateRequest ? 3 : 6;
+    
+    currentStep = templateStepNumber;
     sendEvent("progress", {
-      step: 3,
-      totalSteps: 6,
-      stepName: "Feedback Loop",
-      progress: 50,
-      message: "Analyzing code quality and providing improvements...",
-    });
-    await logLLMResponse(chatId, "feedback-loop", "groq", result.initialCode, result.feedback);
-    sendEvent("step_complete", {
-      step: 3,
-      stepName: "Feedback Loop",
-      output: `Feedback analysis completed (${result.feedback.length} characters)`,
-    });
-
-    // Step 4: Final Expanded Code
-    currentStep = 4;
-    sendEvent("progress", {
-      step: 4,
-      totalSteps: 6,
-      stepName: "Final Expanded Code",
-      progress: 66,
-      message: "Generating final production-ready React code (1000+ lines target)...",
-    });
-    await logLLMResponse(chatId, "final-code", "openai/gpt-oss-120b", result.initialCode, result.finalCode);
-    sendEvent("step_complete", {
-      step: 4,
-      stepName: "Final Expanded Code",
-      output: `Final code completed (${result.finalCode.length} characters)`,
-    });
-
-    // Step 5: Copy Template Files and Parse LLM Response
-    currentStep = 5;
-    sendEvent("progress", {
-      step: 5,
-      totalSteps: 6,
+      step: templateStepNumber,
+      totalSteps: totalSteps,
       stepName: "Template Copy & File Parsing",
-      progress: 83,
+      progress: isUpdateRequest ? 66 : 83,
       message: "Copying template files and parsing LLM response into GameComponent...",
     });
 
@@ -1177,17 +1241,18 @@ app.post("/api/generate/simple2", async (req, res) => {
     }
 
     sendEvent("step_complete", {
-      step: 5,
+      step: templateStepNumber,
       stepName: "Template Copy & File Parsing",
       output: `React project structure created with ${parsedFiles.length} files from LLM and templates`,
     });
 
-    // Step 6: Start Vite Server or Deploy to Nginx
-    currentStep = 6;
+    // Final step - Start Vite Server or Deploy to Nginx
+    const deployStepNumber = isUpdateRequest ? 3 : 6;
+    currentStep = deployStepNumber;
     sendEvent("progress", {
-      step: 6,
-      totalSteps: 6,
-      stepName: "React Deployment",
+      step: deployStepNumber,
+      totalSteps: totalSteps,
+      stepName: isUpdateRequest ? "Updated Game Deployment" : "React Deployment",
       progress: 100,
       message: "Starting Vite dev server or deploying to Nginx...",
     });
@@ -1204,9 +1269,10 @@ app.post("/api/generate/simple2", async (req, res) => {
         content: file.content,
         size: file.content.length,
         lines: file.content.split("\n").length,
-        source: "llm",
+        source: isUpdateRequest ? "llm-update" : "llm",
         index: index + 1,
         totalFiles: parsedFiles.length,
+        isUpdate: isUpdateRequest
       });
     });
 
@@ -1223,9 +1289,9 @@ app.post("/api/generate/simple2", async (req, res) => {
     }
 
     sendEvent("step_complete", {
-      step: 6,
-      stepName: "React Deployment",
-      output: `React project deployed at ${serverInfo.url}`,
+      step: deployStepNumber,
+      stepName: isUpdateRequest ? "Updated Game Deployment" : "React Deployment",
+      output: `${isUpdateRequest ? 'Updated' : 'React'} project deployed at ${serverInfo.url}`,
     });
 
     const simple2ChainData = {
@@ -1233,7 +1299,10 @@ app.post("/api/generate/simple2", async (req, res) => {
       projectId,
       totalFiles: parsedFiles.length,
       mainGameFileLines: lineCount,
-      chainUsed: "simple2-react",
+      chainUsed: isUpdateRequest ? "simple2-react-update" : "simple2-react",
+      isUpdate: isUpdateRequest,
+      fixPrompt: isUpdateRequest ? fixPrompt : null,
+      originalPrompt: isUpdateRequest ? (originalPrompt || prompt) : null,
       setupInstructions: {
         npmInstall: "npm install",
         startCommand: "npm run dev",
@@ -1254,10 +1323,10 @@ app.post("/api/generate/simple2", async (req, res) => {
       },
       crossCheck: {},
       responses: {
-        architecture: result.architecture.length,
-        initialCode: result.initialCode.length,
-        feedback: result.feedback.length,
-        finalCode: result.finalCode.length,
+        architecture: result.architecture?.length || 0,
+        initialCode: result.initialCode?.length || 0,
+        feedback: result.feedback?.length || 0,
+        finalCode: result.finalCode?.length || 0,
       },
     };
 
@@ -1271,17 +1340,25 @@ app.post("/api/generate/simple2", async (req, res) => {
 
     await logCompleteChain(chatId, simple2ChainData);
     sendEvent("complete", simple2ChainData);
-    console.log(chalk.green(`🎉 BULLETPROOF SIMPLE2 React chain completed for Chat ${chatId}!`));
+    
+    if (isUpdateRequest) {
+      console.log(chalk.green(`🔧 CODE UPDATE/FIX chain completed for Chat ${chatId}!`));
+      console.log(chalk.green(`🎯 Fix Applied: ${fixPrompt}`));
+    } else {
+      console.log(chalk.green(`🎉 BULLETPROOF SIMPLE2 React chain completed for Chat ${chatId}!`));
+    }
+    
     console.log(chalk.green(`🎮 React game running at: ${previewUrl}`));
     console.log(chalk.green(`📏 Main game file: ${lineCount} lines (Target: 1000+)`));
 
   } catch (error) {
-    console.error(chalk.red(`💥 Error in BULLETPROOF Simple2 React Chain Chat ${chatId}:`, error.message));
+    console.error(chalk.red(`💥 Error in ${isUpdateRequest ? 'CODE UPDATE' : 'BULLETPROOF Simple2'} React Chain Chat ${chatId}:`, error.message));
     sendEvent("error", {
-      error: "Failed to generate React web game",
+      error: `Failed to ${isUpdateRequest ? 'update' : 'generate'} React web game`,
       details: error.message,
       chatId,
       step: currentStep,
+      isUpdate: isUpdateRequest
     });
   }
   res.end();
